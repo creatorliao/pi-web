@@ -15,6 +15,7 @@ import { useAgentSession, type AgentPhase, type NoticeItem } from "@/hooks/useAg
 import { useDragDrop } from "@/hooks/useDragDrop";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import type { SessionStatsInfo } from "@/lib/pi-types";
+import type { ToolPreset } from "@/lib/tool-presets";
 import type { AppUpdateResponse } from "@/lib/api-types";
 import {
   captureScrollDistance,
@@ -44,6 +45,14 @@ interface Props {
   onSessionStatsPanelOpen?: () => void;
   onContextUsageChange?: (usage: { percent: number | null; contextWindow: number; tokens: number | null } | null) => void;
   onOpenFile?: (filePath: string) => void;
+  onComposerStatusChange?: (status: {
+    toolPreset: ToolPreset;
+    onToolPresetChange?: (preset: ToolPreset) => void;
+    isStreaming: boolean;
+    onCompact?: () => void;
+    onAbortCompaction?: () => void;
+    isCompacting?: boolean;
+  } | null) => void;
   /** Completion sound state + controls, owned by AppShell so tasks finishing in
    *  a non-active workspace can still ring. */
   soundEnabled?: boolean;
@@ -251,7 +260,7 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, defaultExpanded = fa
   );
 }
 
-export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile, soundEnabled = true, onSoundToggle, playDoneSound = () => {}, unlockAudio }: Props) {
+export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile, onComposerStatusChange, soundEnabled = true, onSoundToggle, playDoneSound = () => {}, unlockAudio }: Props) {
   const { t } = useI18n();
   const isMobile = useIsMobile();
 
@@ -298,6 +307,19 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
     modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsPanelOpen,
   });
   const sessionBusy = agentRunning || bashRunning;
+  const canChangeTools = Boolean(session || isNew);
+
+  useEffect(() => {
+    onComposerStatusChange?.({
+      toolPreset,
+      onToolPresetChange: canChangeTools ? handleToolPresetChange : undefined,
+      isStreaming: sessionBusy,
+      onCompact: canChangeTools ? handleCompact : undefined,
+      onAbortCompaction: handleAbortCompaction,
+      isCompacting,
+    });
+    return () => onComposerStatusChange?.(null);
+  }, [canChangeTools, handleAbortCompaction, handleCompact, handleToolPresetChange, isCompacting, onComposerStatusChange, sessionBusy, toolPreset]);
 
   useEffect(() => {
     if (!extensionDialog || soundedExtensionDialogIdRef.current === extensionDialog.id) return;
@@ -555,8 +577,6 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
       isCompacting={isCompacting}
       compactError={compactError}
       compactResult={compactResult}
-      toolPreset={toolPreset}
-      onToolPresetChange={session || isNew ? handleToolPresetChange : undefined}
       thinkingLevel={thinkingLevel}
       onThinkingLevelChange={session || isNew ? handleThinkingLevelChange : undefined}
       availableThinkingLevels={availableThinkingLevels}
@@ -569,8 +589,6 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
       slashCommandsLoading={slashCommandsLoading}
       onLoadSlashCommands={loadSlashCommands}
       onBuiltinCommand={handleBuiltinSlashCommand}
-      soundEnabled={soundEnabled}
-      onSoundToggle={onSoundToggle}
       onAudioUnlock={unlockAudio}
       draftKey={session?.id ?? newSessionDraftKey ?? undefined}
       cwd={session?.cwd ?? newSessionCwd}

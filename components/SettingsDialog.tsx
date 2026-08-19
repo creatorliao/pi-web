@@ -44,12 +44,16 @@ function persistSection(section: SettingsSection): void {
 export function SettingsDialog({
   cwd,
   sessionId,
+  soundEnabled,
+  onSoundToggle,
   onClose,
   onModelsClosed,
   onPluginsReloaded,
 }: {
   cwd: string | null;
   sessionId: string | null;
+  soundEnabled?: boolean;
+  onSoundToggle?: () => void;
   onClose: () => void;
   onModelsClosed: () => void;
   onPluginsReloaded: () => void;
@@ -284,6 +288,21 @@ export function SettingsDialog({
                     );
                   })}
                 </div>
+
+                {onSoundToggle && (
+                  <label style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 28, cursor: "pointer", maxWidth: 480 }}>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(soundEnabled)}
+                      onChange={() => onSoundToggle()}
+                      style={{ marginTop: 3 }}
+                    />
+                    <span>
+                      <span style={{ display: "block", fontSize: 13, color: "var(--text)" }}>{t("settings.completionSound")}</span>
+                      <span style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginTop: 4, lineHeight: 1.45 }}>{t("settings.completionSoundHint")}</span>
+                    </span>
+                  </label>
+                )}
 
                 <label style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 28, cursor: "pointer", maxWidth: 480 }}>
                   <input

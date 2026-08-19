@@ -1627,3 +1627,58 @@ span.token.table {
   border-radius: 999px;
   background: var(--border);
 }
+
+/* 窗口底栏：22px 密度，菜单向上，避免挡住系统任务栏 */
+.app-statusbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  height: 22px;
+  padding: 0 8px;
+  background: color-mix(in srgb, var(--bg-panel) 92%, var(--bg));
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 11px;
+  z-index: 40;
+}
+.app-statusbar-left,
+.app-statusbar-right {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.app-statusbar-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 0;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+}
+.app-statusbar-item:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.app-statusbar-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.app-statusbar-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 4px);
+  z-index: 80;
+  min-width: 220px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.10);
+  overflow: hidden;
+}

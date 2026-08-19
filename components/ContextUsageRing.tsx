@@ -35,8 +35,8 @@ export function ContextUsageRing({
       onBlur={() => setOpen(false)}
       tabIndex={0}
       style={{
-        width: 28,
-        height: 28,
+        width: 22,
+        height: 22,
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
@@ -45,7 +45,7 @@ export function ContextUsageRing({
         position: "relative",
       }}
     >
-      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+      <svg width="15" height="15" viewBox="0 0 18 18" aria-hidden="true">
         <circle cx="9" cy="9" r={radius} fill="none" stroke="var(--border)" strokeWidth="2" />
         <circle
           cx="9"

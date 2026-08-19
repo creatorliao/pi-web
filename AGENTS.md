@@ -92,7 +92,7 @@ components/
   ChatInput.tsx       input bar + model/thinking/tools/compact controls
   MessageView.tsx     renders one message (user/assistant/toolCall/toolResult)
   BranchNavigator.tsx in-session branch switcher
-  ToastHost.tsx       统一短暂提示层（底部居中）
+  ToastHost.tsx       统一短暂提示层（文档区顶部居中，胶囊）
   ChatMinimap.tsx     scroll minimap alongside the message list
   MarkdownBody.tsx    markdown renderer
   ModelsConfig.tsx    modal for editing models.json (opened from sidebar bottom)
@@ -125,6 +125,9 @@ hooks/
 `AgentSession.fork()` **mutates the wrapper's inner state in-place** — after fork, `inner.sessionId` is the *new* session's id. If the wrapper stays alive in the registry under the old id, the next request gets the already-forked state and subsequent forks produce a corrupt `parentSession` chain.
 
 **Fix**: `send("fork")` captures `newSessionId`, then calls `this.destroy()` before returning. The next request for the original session reloads a clean AgentSession from the original file.
+
+### 统一 Toast（瞬时反馈只走一套）
+应用内「说一句就消失」的反馈**只**用 `useToast().showToast`，由 `app/page.tsx` 的 `ToastProvider` + `ToastHost` 渲染。`ToastHost` 必须等 `useEffect` 后再 `createPortal`，否则服务端无节点、客户端有节点，会 hydration 失败。锚在文件列 `[data-toast-anchor]` **顶部居中**，胶囊形（`border-radius: 999px`，随字宽，语气用左侧圆点）。控件保持动词（菜单不改成「已更新」）；没有内容就不要打开层（例如无分支只 Toast，不画空下拉）。语气仅 `info` / `success` / `error`。不要另起气泡、`alert`、斜体空态。按钮上的「已复制」、浏览器系统通知、必须确认的对话框不走 Toast。细则见 [docs/02-Areas/20260819-05-最佳实践_统一Toast消息.md](docs/02-Areas/20260819-05-最佳实践_统一Toast消息.md)。
 
 ### Two kinds of branching — don't confuse them
 - **Fork** (Fork button on user message): creates a new independent `.jsonl` file. Shown as a child in the sidebar tree via `parentSession` header field.
@@ -282,9 +285,10 @@ R{YYYYMMDD}-xx-主题
 
 PARA 根是 `docs/`。领域笔记（无交付闭环）才用 Areas 扁平文件，例如 `docs/02-Areas/20260819-01-pi-web与本机pi内核关系.md`。
 
-专题只认主题夹：`R20260819-03-界面Cursor化布局/` 后续顶栏、对话入口仍追加在该夹（`05`～`08`），不要另开 `R…-对话顶栏`。新开夹仅当主题确实独立（如 `R20260819-10-文件区滚动与提示词分区`）。只说「写需求/方案」也可手建同名 `R{YYYYMMDD}-xx-主题` 夹，但须先确认没有同主题夹。
+专题只认主题夹：`R20260819-03-界面Cursor化布局/` 后续顶栏、对话入口仍追加在该夹（`05`～`08`），不要另开 `R…-对话顶栏`。新开夹仅当主题确实独立（如 `R20260819-10-文件区滚动与提示词分区`、`R20260819-13-底部状态栏`——窗口地面，不是三栏换槽）。只说「写需求/方案」也可手建同名 `R{YYYYMMDD}-xx-主题` 夹，但须先确认没有同主题夹。
 
-留痕操作顺序与正反例见 [20260819-03-最佳实践_主题夹文档留痕.md](docs/02-Areas/20260819-03-最佳实践_主题夹文档留痕.md)。
+留痕操作顺序与正反例见 [20260819-03-最佳实践_主题夹文档留痕.md](docs/02-Areas/20260819-03-最佳实践_主题夹文档留痕.md)。  
+瞬时界面反馈见 [20260819-05-最佳实践_统一Toast消息.md](docs/02-Areas/20260819-05-最佳实践_统一Toast消息.md)。
 
 <!-- BEGIN:nextjs-agent-rules -->
 

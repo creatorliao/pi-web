@@ -19,11 +19,16 @@ export interface ToastItem {
   durationMs: number;
 }
 
-/** 各语气默认停留时间：说明稍长、成功最短、失败留给人读完。 */
+/**
+ * 各语气默认停留时间。
+ * 对照：Carbon Toast 默认 5s；Sonner / Chakra 默认 4–5s。
+ * 本仓 Toast 在文档区，人从对话栏抬头需要额外时间，因此不低于 4s；
+ * 失败句更长，给 8s 读完。
+ */
 export const TOAST_DEFAULT_DURATION_MS: Record<ToastTone, number> = {
-  info: 2800,
-  success: 2200,
-  error: 4500,
+  info: 5000,
+  success: 4000,
+  error: 8000,
 };
 
 /** 同时可见的最大条数，超出时丢掉最旧的。 */

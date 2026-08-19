@@ -8,7 +8,7 @@ const jiti = createJiti(import.meta.url, {
   jsx: { runtime: "automatic" },
   tsconfigPaths: true,
 });
-const { ChatInput, ModelErrorBanner, ModelScopeWarningBanner, canRestoreUserMessage, filterModelOptions, getUpwardMenuMaxHeight, getUserMessageText, getUserMessageDraftImages } = await jiti.import("./ChatInput.tsx");
+const { ChatInput, ModelErrorBanner, ModelScopeWarningBanner, canRestoreUserMessage, filterModelOptions, getUpwardMenuMaxHeight, getFixedUpwardMenuPosition, getUserMessageText, getUserMessageDraftImages } = await jiti.import("./ChatInput.tsx");
 const { clearDraft, getDraft, mergeRestoredSubmissionDraft, mergeRestoredSubmissionText, rekeyDraft, setDraft } = await jiti.import("../lib/draft-store.ts");
 const { I18nProvider } = await jiti.import("../hooks/useI18n");
 
@@ -61,7 +61,40 @@ test("keeps the model selector visible when a model error leaves no options", ()
   assert.match(html, /title="No available models"/);
 });
 
-test("renders the read-only tool preset as the active selection", () => {
+test("uses an upward send arrow when idle and a stop square while streaming", () => {
+  const idle = renderToStaticMarkup(
+    React.createElement(
+      I18nProvider,
+      null,
+      React.createElement(ChatInput, {
+        onSend() {},
+        onAbort() {},
+        isStreaming: false,
+      }),
+    ),
+  );
+  assert.match(idle, /aria-label="Send"/);
+  assert.match(idle, /<line x1="7" y1="11" x2="7" y2="3"/);
+
+  const streaming = renderToStaticMarkup(
+    React.createElement(
+      I18nProvider,
+      null,
+      React.createElement(ChatInput, {
+        onSend() {},
+        onAbort() {},
+        isStreaming: true,
+      }),
+    ),
+  );
+  assert.match(streaming, /aria-label="Stop"/);
+  assert.match(streaming, /<rect x="1.15" y="1.15" width="7.7" height="7.7"/);
+  assert.doesNotMatch(streaming, /Interrupt the current run/);
+  assert.doesNotMatch(streaming, /Voice input is not wired yet/);
+  assert.doesNotMatch(idle, /Voice input is not wired yet/);
+});
+
+test("keeps compact and voice out of the composer chrome", () => {
   const html = renderToStaticMarkup(
     React.createElement(
       I18nProvider,
@@ -69,15 +102,14 @@ test("renders the read-only tool preset as the active selection", () => {
       React.createElement(ChatInput, {
         onSend() {},
         onAbort() {},
-        onToolPresetChange() {},
+        onCompact() {},
         isStreaming: false,
-        toolPreset: "read-only",
       }),
     ),
   );
-
-  assert.match(html, /title="Change tool preset: read-only"/);
-  assert.match(html, />read-only<\/span>/);
+  assert.doesNotMatch(html, /aria-label="Compact context"/);
+  assert.doesNotMatch(html, /Voice input is not wired yet/);
+  assert.match(html, /Context used/);
 });
 
 test("shows and locks the optimistic model while a switch is pending", () => {
@@ -100,7 +132,7 @@ test("shows and locks the optimistic model while a switch is pending", () => {
   assert.match(html, /title="Switching model"/);
   assert.match(html, /aria-busy="true"/);
   assert.match(html, /disabled=""/);
-  assert.match(html, />DeepSeek V4 Flash</);
+  assert.match(html, /DeepSeek V4 Flash/);
   assert.match(html, /animation:spin 0\.8s linear infinite/);
 });
 
@@ -122,6 +154,17 @@ test("filters model options by name and id", () => {
 test("caps an upward menu to the visible space above its anchor", () => {
   assert.equal(getUpwardMenuMaxHeight(343, 36), 299);
   assert.equal(getUpwardMenuMaxHeight(40, 36), 0);
+});
+
+test("pins the composer select menu above the trigger in viewport coordinates", () => {
+  const pos = getFixedUpwardMenuPosition(
+    { top: 400, left: 24, width: 180 },
+    { width: 1280, height: 800, visibleTop: 36 },
+  );
+  assert.equal(pos.bottom, 800 - 400 + 8);
+  assert.equal(pos.left, 24);
+  assert.equal(pos.minWidth, 260);
+  assert.ok(pos.maxHeight <= 400 - 36 - 8);
 });
 
 test("restores text and base64 images when editing a user message", () => {

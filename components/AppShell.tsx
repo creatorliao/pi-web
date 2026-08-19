@@ -10,6 +10,8 @@ import { FileViewer } from "./FileViewer";
 import { TabBar, type Tab } from "./TabBar";
 import { openFileTab, saveFileViewerState } from "./file-tab-state";
 import { SettingsDialog } from "./SettingsDialog";
+import { AppStatusBar } from "./AppStatusBar";
+import type { ToolPreset } from "@/lib/tool-presets";
 import { ProjectTrustDialog } from "./ProjectTrustDialog";
 import { BranchNavigator, sessionHasBranches } from "./BranchNavigator";
 import { useI18n } from "@/hooks/useI18n";
@@ -351,6 +353,71 @@ export function AppShell() {
 
   const handleBranchLeafChange = useCallback((leafId: string | null) => {
     branchLeafChangeFnRef.current?.(leafId);
+  }, []);
+
+  const [statusToolPreset, setStatusToolPreset] = useState<ToolPreset>("default");
+  const [statusToolDisabled, setStatusToolDisabled] = useState(true);
+  const [statusHasTool, setStatusHasTool] = useState(false);
+  const [statusHasCompact, setStatusHasCompact] = useState(false);
+  const [statusCompacting, setStatusCompacting] = useState(false);
+  const [statusCompactDisabled, setStatusCompactDisabled] = useState(true);
+  const statusToolChangeRef = useRef<((preset: ToolPreset) => void) | null>(null);
+  const statusCompactRef = useRef<(() => void) | null>(null);
+  const statusAbortCompactRef = useRef<(() => void) | null>(null);
+  const handleComposerStatusChange = useCallback((
+    status: {
+      toolPreset: ToolPreset;
+      onToolPresetChange?: (preset: ToolPreset) => void;
+      isStreaming: boolean;
+      onCompact?: () => void;
+      onAbortCompaction?: () => void;
+      isCompacting?: boolean;
+    } | null,
+  ) => {
+    if (!status) {
+      statusToolChangeRef.current = null;
+      statusCompactRef.current = null;
+      statusAbortCompactRef.current = null;
+      setStatusHasTool(false);
+      setStatusHasCompact(false);
+      setStatusToolDisabled(true);
+      setStatusCompacting(false);
+      setStatusCompactDisabled(true);
+      return;
+    }
+    if (status.onToolPresetChange) {
+      setStatusHasTool(true);
+      setStatusToolPreset(status.toolPreset);
+      setStatusToolDisabled(status.isStreaming);
+      statusToolChangeRef.current = status.onToolPresetChange;
+    } else {
+      statusToolChangeRef.current = null;
+      setStatusHasTool(false);
+      setStatusToolDisabled(true);
+    }
+    if (status.onCompact) {
+      setStatusHasCompact(true);
+      setStatusCompacting(Boolean(status.isCompacting));
+      setStatusCompactDisabled(status.isStreaming && !status.isCompacting);
+      statusCompactRef.current = status.onCompact;
+      statusAbortCompactRef.current = status.onAbortCompaction ?? null;
+    } else {
+      statusCompactRef.current = null;
+      statusAbortCompactRef.current = null;
+      setStatusHasCompact(false);
+      setStatusCompacting(false);
+      setStatusCompactDisabled(true);
+    }
+  }, []);
+  const handleStatusToolPresetChange = useCallback((preset: ToolPreset) => {
+    statusToolChangeRef.current?.(preset);
+    setStatusToolPreset(preset);
+  }, []);
+  const handleStatusCompact = useCallback(() => {
+    statusCompactRef.current?.();
+  }, []);
+  const handleStatusAbortCompaction = useCallback(() => {
+    statusAbortCompactRef.current?.();
   }, []);
 
   const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
@@ -1478,6 +1545,7 @@ export function AppShell() {
             && ((sessionStats?.userMessages ?? 0) > 0 || selectedSession.messageCount > 0),
           );
           const naming = autoNameStatus.kind === "naming";
+          const disabled = !selectedSession || selectedSession.transient || !hasMessages || naming;
           const label = translate("title.generate");
           const title = !selectedSession || selectedSession.transient
             ? translate("title.unsaved")
@@ -1492,7 +1560,7 @@ export function AppShell() {
                 void handleAutoName();
                 if (mobile) setMobileToolbarMoreOpen(true);
               }}
-              disabled={naming}
+              disabled={disabled}
               title={title}
               aria-label={label}
               style={{
@@ -2107,20 +2175,29 @@ export function AppShell() {
       data-workspace="files"
       style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0, background: "var(--bg)" }}
     >
-      {/* 编辑器桌面页签已并入主顶栏，这里不再画第二行标题。 */}
+      {/* Right panel tab bar */}
       {!mergeFileTabsIntoMainTopBar && (
         <div style={{
           display: "flex",
           alignItems: "center",
           flexShrink: 0,
-          height: 36,
+          height: "calc(36px + env(safe-area-inset-top))",
+          paddingTop: "env(safe-area-inset-top)",
           background: "var(--bg-panel)",
           borderBottom: "1px solid var(--border)",
         }}>
           {renderFileTabStrip(false)}
         </div>
       )}
-      <div style={{ flex: 1, overflow: "hidden", paddingBottom: "env(safe-area-inset-bottom)" }}>
+      <div
+        data-toast-anchor=""
+        style={{
+          flex: 1,
+          overflow: "hidden",
+          position: "relative",
+          paddingBottom: "env(safe-area-inset-bottom)",
+        }}
+      >
         {/* Only the active viewer is mounted; tab state is restored via initialState. */}
         {activeFileTab?.filePath ? (
           <FileViewer
@@ -2209,6 +2286,7 @@ export function AppShell() {
             modelsRefreshKey={modelsRefreshKey}
             chatInputRef={chatInputRef}
             onBranchDataChange={handleBranchDataChange}
+            onComposerStatusChange={handleComposerStatusChange}
             onSystemPromptChange={handleSystemPromptChange}
             onSystemPromptLoaderChange={handleSystemPromptLoaderChange}
             onSessionStatsChange={handleSessionStatsChange}
@@ -2382,8 +2460,17 @@ export function AppShell() {
     `}</style>
     <div style={{
       display: "flex",
+      flexDirection: "column",
       width: "100%",
       height: "var(--app-viewport-height, 100dvh)",
+      overflow: "hidden",
+      background: "var(--bg)",
+    }}>
+    <div style={{
+      display: "flex",
+      flex: 1,
+      minHeight: 0,
+      width: "100%",
       paddingLeft: "env(safe-area-inset-left)",
       paddingRight: "env(safe-area-inset-right)",
       overflow: "hidden",
@@ -2778,10 +2865,24 @@ export function AppShell() {
         {isEditorLayout ? agentWorkspace : fileWorkspace}
       </div>
     </div>
+    <AppStatusBar
+      soundEnabled={soundEnabled}
+      onSoundToggle={onSoundToggle}
+      toolPreset={statusToolPreset}
+      onToolPresetChange={statusHasTool ? handleStatusToolPresetChange : undefined}
+      toolPresetDisabled={statusToolDisabled}
+      onCompact={statusHasCompact ? handleStatusCompact : undefined}
+      onAbortCompaction={handleStatusAbortCompaction}
+      isCompacting={statusCompacting}
+      compactDisabled={statusCompactDisabled}
+    />
+    </div>
     {settingsOpen && (
       <SettingsDialog
         cwd={projectTrustCwd}
         sessionId={selectedSession?.id ?? null}
+        soundEnabled={soundEnabled}
+        onSoundToggle={onSoundToggle}
         onClose={() => {
           setSettingsOpen(false);
           setModelsRefreshKey((key) => key + 1);
