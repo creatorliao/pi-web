@@ -11,7 +11,7 @@ import { parseUnifiedPatch, type SplitDiffCell } from "@/lib/patch";
 import { isEditToolName } from "@/lib/tool-names";
 import { TurnWrittenFiles } from "./TurnWrittenFiles";
 import type { WrittenFile } from "@/lib/turn-written-files";
-import { skillExpansionToCommand } from "@/lib/slash-display";
+import { parseSkillExpansions, skillExpansionsToCompactCommand } from "@/lib/slash-display";
 import type {
   AgentMessage,
   UserMessage,
@@ -299,7 +299,8 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
   const { t } = useI18n();
   const [hovered, setHovered] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [expanded, setExpanded] = useState(false);
+  /** 当前展开的芯片；同名技能用 index 区分 */
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
 
   const content =
     typeof message.content === "string"
@@ -314,14 +315,9 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
       ? []
       : message.content.filter((b): b is ImageContent => b.type === "image");
 
-  const commandText = skillExpansionToCommand(content);
-  const commandSeparator = commandText?.search(/\s/) ?? -1;
-  const commandName = commandText
-    ? commandSeparator === -1 ? commandText : commandText.slice(0, commandSeparator)
-    : "";
-  const commandArgs = commandText && commandSeparator !== -1
-    ? commandText.slice(commandSeparator + 1)
-    : "";
+  const skillExpansions = parseSkillExpansions(content);
+  const commandText = skillExpansionsToCompactCommand(content);
+  const commandProse = skillExpansions?.prose ?? "";
 
   const time = formatTime(message.timestamp);
   const canFork = !!entryId && !!onFork;
@@ -386,48 +382,56 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
             overflowY: "auto",
           }}
         >
-          {commandText ? (
+          {skillExpansions ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
               {imageBlocksNode}
               <div style={{ display: "flex", alignItems: "flex-start", gap: 8, flexWrap: "wrap" }}>
-                <button
-                  onClick={() => setExpanded((prev) => !prev)}
-                  title={expanded ? t("i18n.collapse") : t("i18n.expand")}
-                  aria-expanded={expanded}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                    flexShrink: 0,
-                    padding: 0,
-                    background: "none",
-                    border: "none",
-                    cursor: "pointer",
-                    color: "var(--accent)",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: 13,
-                    textAlign: "left",
-                  }}
-                >
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {commandName}
-                  </span>
-                  <svg
-                    width="11"
-                    height="11"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    style={{ flexShrink: 0, opacity: 0.75, transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}
-                    aria-hidden="true"
-                  >
-                    <polyline points="6 9 12 15 18 9" />
-                  </svg>
-                </button>
-                {commandArgs && (
+                {skillExpansions.envelopes.map((envelope, index) => {
+                  const chipKey = `${index}:${envelope.name}`;
+                  const expanded = expandedKey === chipKey;
+                  return (
+                    <button
+                      key={chipKey}
+                      onClick={() => setExpandedKey((prev) => prev === chipKey ? null : chipKey)}
+                      title={expanded ? t("i18n.collapse") : t("i18n.expand")}
+                      aria-label={`/skill:${envelope.name}`}
+                      aria-expanded={expanded}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        flexShrink: 0,
+                        padding: 0,
+                        background: "none",
+                        border: "none",
+                        cursor: "pointer",
+                        color: "var(--accent)",
+                        fontFamily: "var(--font-mono)",
+                        fontSize: 13,
+                        textAlign: "left",
+                      }}
+                    >
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {`/skill:${envelope.name}`}
+                      </span>
+                      <svg
+                        width="11"
+                        height="11"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        style={{ flexShrink: 0, opacity: 0.75, transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}
+                        aria-hidden="true"
+                      >
+                        <polyline points="6 9 12 15 18 9" />
+                      </svg>
+                    </button>
+                  );
+                })}
+                {commandProse && (
                   <span style={{
                     color: "var(--text)",
                     fontSize: 14,
@@ -437,13 +441,17 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
                     minWidth: 0,
                     flex: 1,
                   }}>
-                    {commandArgs}
+                    {commandProse}
                   </span>
                 )}
               </div>
-              {expanded && (
-                <MarkdownBody className="markdown-user-message" cwd={cwd} onOpenFile={onOpenFile}>{content}</MarkdownBody>
-              )}
+              {expandedKey && (() => {
+                const envelope = skillExpansions.envelopes.find((item, index) => `${index}:${item.name}` === expandedKey);
+                if (!envelope) return null;
+                return (
+                  <MarkdownBody className="markdown-user-message" cwd={cwd} onOpenFile={onOpenFile}>{envelope.text}</MarkdownBody>
+                );
+              })()}
             </div>
           ) : (
           <>

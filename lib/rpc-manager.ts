@@ -25,6 +25,7 @@ import type {
   SessionMessageEntry,
 } from "./types";
 import { createHeadlessCustomUiTui, DEFAULT_CUSTOM_UI_COLUMNS, type HeadlessCustomUiTui } from "./custom-ui-terminal";
+import { expandAllSkillCommands, type ExpandableSkill } from "./skill-expand";
 
 // ============================================================================
 // Types
@@ -398,6 +399,22 @@ export class AgentSessionWrapper {
     this.onDestroyCallback = cb;
   }
 
+  /**
+   * 发送前展开全部已知 `/skill:`。结果以 `<skill` 开头时 SDK 不再二次单颗展开。
+   */
+  private expandOutgoingPrompt(text: string): string {
+    try {
+      const skills = this.inner.resourceLoader.getSkills().skills as ExpandableSkill[];
+      return expandAllSkillCommands(text, skills);
+    } catch (error) {
+      console.error(
+        "[pi-web] skill expansion failed, sending original prompt:",
+        error instanceof Error ? error.message : error,
+      );
+      return text;
+    }
+  }
+
   async send(command: Record<string, unknown>): Promise<unknown> {
     this.resetIdleTimer();
     const type = command.type as string;
@@ -450,7 +467,7 @@ export class AgentSessionWrapper {
           notifyRunningChange();
           let prompt: Promise<void>;
           try {
-            prompt = this.inner.prompt(command.message as string, {
+            prompt = this.inner.prompt(this.expandOutgoingPrompt(command.message as string), {
               ...(promptImages?.length ? { images: promptImages } : {}),
               ...(streamingBehavior ? { streamingBehavior } : {}),
               source: "rpc",
@@ -645,13 +662,13 @@ export class AgentSessionWrapper {
 
       case "steer": {
         const steerImages = command.images as Array<{ type: "image"; data: string; mimeType: string }> | undefined;
-        await this.inner.steer(command.message as string, steerImages?.length ? steerImages : undefined);
+        await this.inner.steer(this.expandOutgoingPrompt(command.message as string), steerImages?.length ? steerImages : undefined);
         return null;
       }
 
       case "follow_up": {
         const followImages = command.images as Array<{ type: "image"; data: string; mimeType: string }> | undefined;
-        await this.inner.followUp(command.message as string, followImages?.length ? followImages : undefined);
+        await this.inner.followUp(this.expandOutgoingPrompt(command.message as string), followImages?.length ? followImages : undefined);
         return null;
       }
 

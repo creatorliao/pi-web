@@ -97,6 +97,27 @@ test("renders a complete SDK skill expansion as a compact command", () => {
   assert.doesNotMatch(html, /Review the supplied files/);
 });
 
+test("renders each stacked skill expansion as its own dropdown chip", () => {
+  const second = `<skill name="docx" location="/skills/docx/SKILL.md">
+References are relative to /skills/docx.
+
+Convert the document.
+</skill>
+
+这两个技能怎么用`;
+  const html = renderMessage({
+    role: "user",
+    content: `${COMPLETE_SKILL_EXPANSION.slice(0, COMPLETE_SKILL_EXPANSION.lastIndexOf("\n\nsrc/main.ts"))}\n\n${second}`,
+  });
+
+  assert.match(html, /aria-label="\/skill:review"/);
+  assert.match(html, /aria-label="\/skill:docx"/);
+  assert.match(html, /这两个技能怎么用/);
+  assert.doesNotMatch(html, /src\/main\.ts/);
+  assert.doesNotMatch(html, /Review the supplied files/);
+  assert.doesNotMatch(html, /Convert the document/);
+});
+
 test("does not collapse incomplete skill-looking user text", () => {
   const html = renderMessage({
     role: "user",
