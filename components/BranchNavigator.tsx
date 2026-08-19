@@ -318,7 +318,14 @@ export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, cont
 
   if (inline) {
     return (
-      <div style={{ height: "100%", display: "flex", alignItems: "stretch" }}>
+      <div style={{
+        // 底栏只借用面板时不能占 100% 高：会把主工作区在纵向 flex 里挤成 0，底栏看起来像跑到顶上。
+        height: hideInlineButton ? 0 : "100%",
+        width: hideInlineButton ? 0 : undefined,
+        overflow: hideInlineButton ? "visible" : undefined,
+        display: hideInlineButton ? "contents" : "flex",
+        alignItems: "stretch",
+      }}>
         <button
           ref={btnRef}
           onClick={() => onToggle ? onToggle() : setOpenInternal((v) => !v)}

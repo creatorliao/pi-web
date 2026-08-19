@@ -22,11 +22,15 @@ function playTone(ctx: AudioContext) {
 }
 
 export function useAudio() {
-  const [enabled, setEnabled] = useState<boolean>(() => {
-    if (typeof window === "undefined") return true;
+  // 首屏必须和服务端同一默认值。useState 读 localStorage 会在客户端
+  // 第一次渲染就变成 false，底栏喇叭 title 对不上，整页水合失败白屏。
+  const [enabled, setEnabled] = useState(true);
+
+  useEffect(() => {
     const stored = localStorage.getItem("pi-sound-enabled");
-    return stored === null ? true : stored === "true";
-  });
+    if (stored === null) return;
+    setEnabled(stored === "true");
+  }, []);
 
   const enabledRef = useRef(enabled);
   useEffect(() => { enabledRef.current = enabled; }, [enabled]);
