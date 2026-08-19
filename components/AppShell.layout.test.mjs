@@ -16,7 +16,8 @@ test("desktop editor layout puts files in the main column and chat in the aux pa
 
 test("session list is portaled into the agent block on desktop only", () => {
   assert.match(source, /sessionListPortalTarget=\{isMobile \? null : sessionListHost\}/);
-  assert.match(source, /ref=\{setSessionListHost\}/);
+  assert.match(source, /ref=\{setHistoryDrawerRef\}/);
+  assert.match(source, /setSessionListHost\(node\)/);
 });
 
 test("desktop chat entry uses a push drawer and tab-bar icons stay off the file tabs", () => {
@@ -30,10 +31,13 @@ test("desktop chat entry uses a push drawer and tab-bar icons stay off the file 
   assert.match(source, /const mergeFileTabsIntoMainTopBar = isEditorLayout && !isMobile/);
   assert.match(source, /mergeFileTabsIntoMainTopBar && renderFileTabStrip\(true\)/);
   assert.match(source, /!mergeFileTabsIntoMainTopBar && \(/);
-  assert.match(source, /const AGENT_HISTORY_DRAWER_WIDTH = 240/);
-  assert.match(source, /width: agentHistoryOpen \? AGENT_HISTORY_DRAWER_WIDTH : 0/);
+  assert.match(source, /storageKey: "pi-agent-history-width"/);
+  assert.match(source, /data-resize-handle="history"/);
+  assert.match(source, /data-agent-history-open=\{agentHistoryOpen \? "" : undefined\}/);
   assert.match(source, /borderLeft: agentHistoryOpen \? "1px solid var\(--border\)" : "none"/);
   assert.match(source, /rightPanelResizer\.width \+ \(/);
+  assert.match(source, /historyResizer\.width/);
+  assert.doesNotMatch(source, /AGENT_HISTORY_DRAWER_WIDTH/);
   assert.doesNotMatch(source, /display: agentHistoryOpen && !isMobile \? "none"/);
   assert.doesNotMatch(source, /<circle cx="12" cy="12" r="8" \/>/);
   assert.doesNotMatch(source, /<span aria-hidden="true">\+<\/span>/);
@@ -44,4 +48,9 @@ test("desktop chat entry uses a push drawer and tab-bar icons stay off the file 
 test("desktop chat no longer mounts ChatMinimap hover preview", () => {
   assert.doesNotMatch(chatWindow, /<ChatMinimap[\s>]/);
   assert.match(chatInput, /paddingRight: 16,/);
+});
+
+test("chat column uses the shared overlay scrollbar instead of hiding it", () => {
+  assert.match(chatWindow, /overlay-scroll/);
+  assert.doesNotMatch(chatWindow, /scrollbar-width:none/);
 });

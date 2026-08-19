@@ -11,6 +11,7 @@ import { workspaceKeyOf } from "@/lib/workspace-memory";
 import { useI18n } from "@/hooks/useI18n";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
+import { markOverlayScrolling } from "@/lib/overlay-scroll";
 
 declare global {
   interface Window {
@@ -1629,6 +1630,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         const sessionList = (
       <div
         data-session-list="true"
+        className="overlay-scroll"
+        onScroll={(event) => markOverlayScrolling(event.currentTarget)}
         style={{
           flex: sessionListPortalTarget ? "1 1 auto" : (explorerOpen && (selectedCwdProp || selectedCwd) ? "1 1 0" : "1 1 auto"),
           overflowY: "auto",
@@ -1775,7 +1778,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             </ToolbarIconButton>
           </div>
           {explorerOpen && (
-            <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
+            <div
+              className="overlay-scroll"
+              onScroll={(event) => markOverlayScrolling(event.currentTarget)}
+              style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}
+            >
               <FileExplorer
                 ref={fileExplorerRef}
                 cwd={selectedCwd ?? selectedCwdProp!}

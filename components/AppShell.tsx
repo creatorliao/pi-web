@@ -33,16 +33,21 @@ import {
   setLastOpenSession,
   workspaceKeyOf,
 } from "@/lib/workspace-memory";
+import { applyHistoryDrag, applyRightPanelDrag } from "@/lib/panel-cascade";
 import {
   getDefaultRightPanelWidth,
   getRightPanelMaxWidth,
   getSidebarMaxWidth,
+  HISTORY_DEFAULT_WIDTH,
+  HISTORY_MAX_WIDTH,
+  HISTORY_MIN_WIDTH,
   RIGHT_PANEL_FALLBACK_WIDTH,
   RIGHT_PANEL_MAX_WIDTH,
   RIGHT_PANEL_MIN_WIDTH,
   SIDEBAR_DEFAULT_WIDTH,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
+  SIDEBAR_SNAP_COLLAPSE,
 } from "@/lib/panel-layout";
 import type { AgentMessage, BlockingExtensionUiRequest, SessionInfo, SessionTreeNode } from "@/lib/types";
 import type { ProjectTrustStatus } from "@/lib/api-types";
@@ -61,8 +66,6 @@ type AutoNameStatus =
   | { kind: "error"; message: string };
 
 const TOP_BAR_ICON_BUTTON_SIZE = 36;
-/** 对话列表抽屉固定宽度（D7）。 */
-const AGENT_HISTORY_DRAWER_WIDTH = 240;
 /** 侧栏窄于此时「设置」只显示齿轮，避免挤掉标签。 */
 const SETTINGS_LABEL_MIN_WIDTH = 220;
 
@@ -119,21 +122,48 @@ export function AppShell() {
   const [mobileSidebarReady, setMobileSidebarReady] = useState(false);
   const sidebarWidthRef = useRef(SIDEBAR_DEFAULT_WIDTH);
   const rightPanelWidthRef = useRef(RIGHT_PANEL_FALLBACK_WIDTH);
+  const historyWidthRef = useRef(HISTORY_DEFAULT_WIDTH);
+  const agentHistoryOpenRef = useRef(agentHistoryOpen);
+  const isEditorLayoutRef = useRef(isEditorLayout);
+  const historyDrawerRef = useRef<HTMLDivElement | null>(null);
+  const commitChatWidthRef = useRef<(width: number) => void>(() => undefined);
+  const persistHistoryWidthRef = useRef<(width: number) => void>(() => undefined);
+  const rightDragStartRef = useRef({
+    chatWidth: RIGHT_PANEL_FALLBACK_WIDTH,
+    historyOpen: false,
+    historyWidth: HISTORY_DEFAULT_WIDTH,
+  });
+  const historyDragStartRef = useRef({
+    chatWidth: RIGHT_PANEL_FALLBACK_WIDTH,
+    historyWidth: HISTORY_DEFAULT_WIDTH,
+  });
+  const liveRightDragRef = useRef<{
+    chatWidth: number;
+    historyOpen: boolean;
+    historyWidth: number;
+  } | null>(null);
+  agentHistoryOpenRef.current = agentHistoryOpen;
+  isEditorLayoutRef.current = isEditorLayout;
   const getResponsiveRightPanelWidth = useCallback(
     () => typeof window === "undefined"
       ? RIGHT_PANEL_FALLBACK_WIDTH
       : getDefaultRightPanelWidth(window.innerWidth),
     [],
   );
+  const getVisibleHistoryWidth = useCallback(() => (
+    !isMobile && isEditorLayout && rightPanelOpen && agentHistoryOpen
+      ? historyWidthRef.current
+      : 0
+  ), [agentHistoryOpen, isEditorLayout, isMobile, rightPanelOpen]);
   const getResponsiveSidebarMaxWidth = useCallback(
     () => typeof window === "undefined"
       ? SIDEBAR_MAX_WIDTH
       : getSidebarMaxWidth({
         viewportWidth: window.innerWidth,
         rightPanelOpen,
-        rightPanelWidth: rightPanelWidthRef.current,
+        rightPanelWidth: rightPanelWidthRef.current + getVisibleHistoryWidth(),
       }),
-    [rightPanelOpen],
+    [getVisibleHistoryWidth, rightPanelOpen],
   );
   const getResponsiveRightPanelMaxWidth = useCallback(
     () => typeof window === "undefined"
@@ -145,6 +175,19 @@ export function AppShell() {
       }),
     [sidebarOpen],
   );
+  const applyHistoryDrawerLive = useCallback((open: boolean, width: number) => {
+    const drawer = historyDrawerRef.current;
+    if (!drawer) return;
+    // 只改变量和开合属性，不写 style.width，避免松手后残留内联宽度盖住 CSS。
+    drawer.style.setProperty("--agent-history-width", `${width}px`);
+    if (open) {
+      drawer.setAttribute("data-agent-history-open", "");
+      drawer.style.borderLeft = "1px solid var(--border)";
+    } else {
+      drawer.removeAttribute("data-agent-history-open");
+      drawer.style.borderLeft = "none";
+    }
+  }, []);
   const sidebarResizer = useResizablePanel({
     ariaLabel: translate("layout.resizeSidebar"),
     cssVariable: "--sidebar-width",
@@ -155,6 +198,48 @@ export function AppShell() {
     minWidth: SIDEBAR_MIN_WIDTH,
     storageKey: "pi-sidebar-width",
     widthRef: sidebarWidthRef,
+    onFinishDrag: (rawWidth) => {
+      if (rawWidth < SIDEBAR_SNAP_COLLAPSE) {
+        setSidebarOpen(false);
+        return "collapse";
+      }
+      return "persist";
+    },
+  });
+  const historyResizer = useResizablePanel({
+    ariaLabel: translate("layout.resizeHistory"),
+    cssVariable: "--agent-history-width",
+    defaultWidth: HISTORY_DEFAULT_WIDTH,
+    getMaxWidth: () => HISTORY_MAX_WIDTH,
+    growthDirection: "left",
+    maxWidth: HISTORY_MAX_WIDTH,
+    minWidth: HISTORY_MIN_WIDTH,
+    storageKey: "pi-agent-history-width",
+    widthRef: historyWidthRef,
+    onDragStart: () => {
+      historyDragStartRef.current = {
+        chatWidth: rightPanelWidthRef.current,
+        historyWidth: historyWidthRef.current,
+      };
+    },
+    mapLiveWidth: (rawWidth) => {
+      if (!isEditorLayoutRef.current) {
+        return rawWidth;
+      }
+      const next = applyHistoryDrag(historyDragStartRef.current, rawWidth);
+      document.getElementById("file-panel")?.style.setProperty(
+        "--right-panel-width",
+        `${next.chatWidth + next.historyWidth}px`,
+      );
+      return next.historyWidth;
+    },
+    onFinishDrag: (_rawWidth, visibleWidth) => {
+      if (isEditorLayoutRef.current) {
+        const next = applyHistoryDrag(historyDragStartRef.current, visibleWidth);
+        commitChatWidthRef.current(next.chatWidth);
+      }
+      return "persist";
+    },
   });
   const rightPanelResizer = useResizablePanel({
     ariaLabel: translate("layout.resizeFilePanel"),
@@ -167,7 +252,62 @@ export function AppShell() {
     minWidth: RIGHT_PANEL_MIN_WIDTH,
     storageKey: "pi-right-panel-width",
     widthRef: rightPanelWidthRef,
+    toCssWidth: (chatWidth) => {
+      const live = liveRightDragRef.current;
+      if (live) {
+        return chatWidth + (
+          !isMobile && isEditorLayoutRef.current && live.historyOpen ? live.historyWidth : 0
+        );
+      }
+      return chatWidth + getVisibleHistoryWidth();
+    },
+    onDragStart: () => {
+      rightDragStartRef.current = {
+        chatWidth: rightPanelWidthRef.current,
+        historyOpen: agentHistoryOpenRef.current,
+        historyWidth: historyWidthRef.current,
+      };
+      liveRightDragRef.current = rightDragStartRef.current;
+    },
+    mapLiveWidth: (rawWidth) => {
+      const next = applyRightPanelDrag(rightDragStartRef.current, rawWidth, {
+        chatMax: getResponsiveRightPanelMaxWidth(),
+      });
+      liveRightDragRef.current = next;
+      applyHistoryDrawerLive(next.historyOpen, next.historyWidth);
+      // 越过关历史阈值时立刻同步 React，避免重绘把抽屉又撑开。
+      if (next.historyOpen !== agentHistoryOpenRef.current) {
+        setAgentHistoryOpen(next.historyOpen);
+      }
+      return next.chatWidth;
+    },
+    onFinishDrag: (rawWidth, visibleWidth) => {
+      const next = applyRightPanelDrag(rightDragStartRef.current, rawWidth, {
+        chatMax: getResponsiveRightPanelMaxWidth(),
+      });
+      // 松手后 hook 还会 commitWidth；先留下 live 结果给 toCssWidth，避免仍按旧的「历史开着」加宽。
+      liveRightDragRef.current = next;
+      agentHistoryOpenRef.current = next.historyOpen;
+      setAgentHistoryOpen(next.historyOpen);
+      if (next.historyOpen) {
+        persistHistoryWidthRef.current(next.historyWidth);
+      }
+      applyHistoryDrawerLive(next.historyOpen, next.historyWidth);
+      if (next.collapsePanel) {
+        setRightPanelOpen(false);
+        return "collapse";
+      }
+      void visibleWidth;
+      return "persist";
+    },
   });
+  commitChatWidthRef.current = rightPanelResizer.commitWidth;
+  persistHistoryWidthRef.current = historyResizer.commitWidth;
+  const setHistoryDrawerRef = useCallback((node: HTMLDivElement | null) => {
+    historyDrawerRef.current = node;
+    historyResizer.panelRef.current = node;
+    setSessionListHost(node);
+  }, [historyResizer.panelRef]);
   const reclampSidebarWidth = sidebarResizer.reclampWidth;
   const reclampRightPanelWidth = rightPanelResizer.reclampWidth;
   // On mobile the sidebar is an overlay drawer; hide it by default so the chat
@@ -182,10 +322,14 @@ export function AppShell() {
     setMobileSidebarReady(true);
   }, []);
   useEffect(() => {
-    if (!rightPanelOpen) return;
+    if (!rightPanelOpen || rightPanelResizer.isResizing || historyResizer.isResizing) return;
     reclampSidebarWidth();
     reclampRightPanelWidth();
-  }, [reclampRightPanelWidth, reclampSidebarWidth, rightPanelOpen]);
+  }, [agentHistoryOpen, historyResizer.isResizing, reclampRightPanelWidth, reclampSidebarWidth, rightPanelOpen, rightPanelResizer.isResizing]);
+  useEffect(() => {
+    if (rightPanelResizer.isResizing) return;
+    liveRightDragRef.current = null;
+  }, [rightPanelResizer.isResizing]);
   const chatInputRef = useRef<ChatInputHandle | null>(null);
   const topBarRef = useRef<HTMLDivElement>(null);
   const mobileToolbarRef = useRef<HTMLDivElement>(null);
@@ -1946,21 +2090,31 @@ export function AppShell() {
           )
         ) : null}
       </div>
+        {!isMobile && agentHistoryOpen && (
+          <div
+            {...historyResizer.separatorProps}
+            className={`panel-resize-handle history-resize-handle${historyResizer.isResizing ? " is-resizing" : ""}`}
+            data-resize-handle="history"
+            title={`${translate("layout.resizeHistory")}: ${translate("layout.resizeHint")}`}
+          />
+        )}
         {!isMobile && (
           <div
-            ref={setSessionListHost}
+            ref={setHistoryDrawerRef}
             data-agent-history-drawer=""
+            className={historyResizer.isResizing || rightPanelResizer.isResizing ? "history-drawer-resizing" : ""}
+            data-agent-history-open={agentHistoryOpen ? "" : undefined}
             style={{
-              // 列表在对话右侧：打开时聊天左移；编辑器下右栏总宽 +240，从中间借空间。
-              width: agentHistoryOpen ? AGENT_HISTORY_DRAWER_WIDTH : 0,
+              // 列表在对话右侧：打开时聊天左移；编辑器下右栏总宽加上历史宽，从中间借空间。
               height: "100%",
               flexShrink: 0,
               overflow: "hidden",
               minHeight: 0,
               background: "var(--bg-panel)",
               borderLeft: agentHistoryOpen ? "1px solid var(--border)" : "none",
-              transition: "width 0.2s ease",
-            }}
+              transition: historyResizer.isResizing || rightPanelResizer.isResizing ? "none" : "width 0.2s ease",
+              "--agent-history-width": `${historyResizer.width}px`,
+            } as CSSProperties}
           />
         )}
       </div>
@@ -2441,11 +2595,11 @@ export function AppShell() {
       <div
         ref={rightPanelResizer.panelRef}
         id="file-panel"
-        className={`right-panel-container${rightPanelOpen ? " right-panel-open" : " right-panel-closed"}${rightPanelResizer.isResizing ? " right-panel-resizing" : ""}`}
+        className={`right-panel-container${rightPanelOpen ? " right-panel-open" : " right-panel-closed"}${rightPanelResizer.isResizing || historyResizer.isResizing ? " right-panel-resizing" : ""}`}
         style={{
           "--right-panel-width": `${rightPanelResizer.width + (
             !isMobile && isEditorLayout && rightPanelOpen && agentHistoryOpen
-              ? AGENT_HISTORY_DRAWER_WIDTH
+              ? historyResizer.width
               : 0
           )}px`,
           display: "flex",

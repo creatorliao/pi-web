@@ -56,7 +56,10 @@ test("TextFileViewer snapshots and restores lightweight tab state", () => {
   assert.match(block, /onStateChangeRef\.current\?\.\(\{ \.\.\.viewerStateRef\.current \}\)/);
   assert.match(block, /displayMode: requestedInitialDisplayMode/);
   assert.match(block, /viewerStateRef\.current\.displayMode = nextDisplayMode/);
-  assert.match(block, /viewerStateRef\.current\.wrapLines = next/);
+  assert.match(block, /wrapLines: true/);
+  assert.doesNotMatch(block, /toggleWrapLines/);
+  assert.doesNotMatch(block, /i18n\.enableWrap/);
+  assert.match(block, /overflowX: "hidden"/);
   assert.match(block, /viewerStateRef\.current\.scrollTop = event\.currentTarget\.scrollTop/);
   assert.match(block, /viewerStateRef\.current\.scrollLeft = event\.currentTarget\.scrollLeft/);
   assert.match(block, /content\.scrollTop = viewerStateRef\.current\.scrollTop/);

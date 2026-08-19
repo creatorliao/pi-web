@@ -99,6 +99,7 @@ export const zhCNLocale: LocalePlugin = {
     "layout.resizeSidebar": "调整侧边栏宽度",
     "layout.resizeFilePanel": "调整右侧栏宽度",
     "layout.resizeAgentPanel": "调整对话栏宽度",
+    "layout.resizeHistory": "调整对话列表宽度",
     "layout.resizeHint": "拖动调整宽度。双击或按 Enter 恢复默认值。",
     "sidebar.new": "新对话",
     "chat.historyList": "对话列表",

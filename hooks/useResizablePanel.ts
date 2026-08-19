@@ -15,6 +15,7 @@ interface DragState {
   pointerId: number;
   startX: number;
   startWidth: number;
+  lastRawWidth: number;
   target: HTMLDivElement;
   previousCursor: string;
   previousUserSelect: string;
@@ -31,6 +32,13 @@ interface UseResizablePanelOptions {
   minWidth: number;
   storageKey: string;
   widthRef: MutableRefObject<number>;
+  /** 指针未夹紧宽度 → 本面板可见宽。用于级联让宽。 */
+  mapLiveWidth?: (rawWidth: number, startWidth: number) => number;
+  /** 可见宽 → 写入 CSS 变量的像素（例如对话宽 + 打开的历史宽）。 */
+  toCssWidth?: (visibleWidth: number) => number;
+  onDragStart?: () => void;
+  /** collapse：松手关栏，但仍把合法可见宽写入存储，不当吸附阈值存盘。 */
+  onFinishDrag?: (rawWidth: number, visibleWidth: number) => "persist" | "collapse";
 }
 
 interface CommitOptions {
@@ -73,6 +81,14 @@ export function useResizablePanel(options: UseResizablePanelOptions) {
   const panelRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
   const restoredRef = useRef(false);
+  const mapLiveWidthRef = useRef(options.mapLiveWidth);
+  const toCssWidthRef = useRef(options.toCssWidth);
+  const onDragStartRef = useRef(options.onDragStart);
+  const onFinishDragRef = useRef(options.onFinishDrag);
+  mapLiveWidthRef.current = options.mapLiveWidth;
+  toCssWidthRef.current = options.toCssWidth;
+  onDragStartRef.current = options.onDragStart;
+  onFinishDragRef.current = options.onFinishDrag;
   const [width, setWidth] = useState(defaultWidth);
   const [isResizing, setIsResizing] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -90,7 +106,8 @@ export function useResizablePanel(options: UseResizablePanelOptions) {
 
   const applyLiveWidth = useCallback((nextWidth: number) => {
     widthRef.current = nextWidth;
-    panelRef.current?.style.setProperty(cssVariable, `${nextWidth}px`);
+    const cssWidth = toCssWidthRef.current?.(nextWidth) ?? nextWidth;
+    panelRef.current?.style.setProperty(cssVariable, `${cssWidth}px`);
   }, [cssVariable, widthRef]);
 
   const commitWidth = useCallback((candidate: number, commitOptions: CommitOptions = {}) => {
@@ -114,7 +131,10 @@ export function useResizablePanel(options: UseResizablePanelOptions) {
     dragRef.current = null;
     restoreBodyState(drag);
     setIsResizing(false);
-    commitWidth(widthRef.current, { forcePersist: true });
+    const visibleWidth = clampWidth(widthRef.current);
+    onFinishDragRef.current?.(drag.lastRawWidth, visibleWidth);
+    // 吸附关闭也只持久化合法可见宽，避免把 160/239 写进 localStorage。
+    commitWidth(visibleWidth, { forcePersist: true });
 
     try {
       if (drag.target.hasPointerCapture(pointerId)) {
@@ -123,7 +143,7 @@ export function useResizablePanel(options: UseResizablePanelOptions) {
     } catch {
       // The browser may have already released capture after pointer cancellation.
     }
-  }, [commitWidth, restoreBodyState, widthRef]);
+  }, [clampWidth, commitWidth, restoreBodyState, widthRef]);
 
   const onPointerDown = useCallback((event: PointerEvent<HTMLDivElement>) => {
     if (event.pointerType === "mouse" && event.button !== 0) return;
@@ -140,6 +160,7 @@ export function useResizablePanel(options: UseResizablePanelOptions) {
       pointerId: event.pointerId,
       startX: event.clientX,
       startWidth: widthRef.current,
+      lastRawWidth: widthRef.current,
       target,
       previousCursor: document.body.style.cursor,
       previousUserSelect: document.body.style.userSelect,
@@ -147,6 +168,7 @@ export function useResizablePanel(options: UseResizablePanelOptions) {
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
     setIsResizing(true);
+    onDragStartRef.current?.();
   }, [finishResize, widthRef]);
 
   const onPointerMove = useCallback((event: PointerEvent<HTMLDivElement>) => {
@@ -159,7 +181,10 @@ export function useResizablePanel(options: UseResizablePanelOptions) {
     event.preventDefault();
 
     const direction = growthDirection === "right" ? 1 : -1;
-    const nextWidth = clampWidth(drag.startWidth + ((event.clientX - drag.startX) * direction));
+    const rawWidth = drag.startWidth + ((event.clientX - drag.startX) * direction);
+    drag.lastRawWidth = rawWidth;
+    const mapped = mapLiveWidthRef.current?.(rawWidth, drag.startWidth) ?? rawWidth;
+    const nextWidth = clampWidth(mapped);
     applyLiveWidth(nextWidth);
     event.currentTarget.setAttribute("aria-valuenow", String(nextWidth));
     event.currentTarget.setAttribute("aria-valuetext", `${nextWidth} px`);
@@ -186,6 +211,13 @@ export function useResizablePanel(options: UseResizablePanelOptions) {
     commitWidth(widthRef.current);
   }, [commitWidth, widthRef]);
 
+  const tryCollapseFromKeyboard = useCallback((rawWidth: number) => {
+    const visibleWidth = clampWidth(widthRef.current);
+    const action = onFinishDragRef.current?.(rawWidth, visibleWidth) ?? "persist";
+    commitWidth(visibleWidth, { forcePersist: true });
+    return action === "collapse";
+  }, [clampWidth, commitWidth, widthRef]);
+
   const onKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
     const step = event.shiftKey ? 32 : 12;
     const growKey = growthDirection === "right" ? "ArrowRight" : "ArrowLeft";
@@ -196,9 +228,14 @@ export function useResizablePanel(options: UseResizablePanelOptions) {
       commitWidth(widthRef.current + step, { forcePersist: true });
     } else if (event.key === shrinkKey) {
       event.preventDefault();
-      commitWidth(widthRef.current - step, { forcePersist: true });
+      const nextWidth = widthRef.current - step;
+      // 已在最小可见宽再往里收：视为越过吸附，交给调用方关栏。
+      if (nextWidth < minWidth && tryCollapseFromKeyboard(nextWidth)) return;
+      commitWidth(nextWidth, { forcePersist: true });
     } else if (event.key === "Home") {
       event.preventDefault();
+      // 第一次 Home 落到最小可见宽；再按一次才关栏，避免误触消失。
+      if (widthRef.current <= minWidth && tryCollapseFromKeyboard(minWidth - 1)) return;
       commitWidth(minWidth, { forcePersist: true });
     } else if (event.key === "End") {
       event.preventDefault();
@@ -207,7 +244,7 @@ export function useResizablePanel(options: UseResizablePanelOptions) {
       event.preventDefault();
       resetWidth();
     }
-  }, [commitWidth, effectiveMaxWidth, growthDirection, minWidth, resetWidth, widthRef]);
+  }, [commitWidth, effectiveMaxWidth, growthDirection, minWidth, resetWidth, tryCollapseFromKeyboard, widthRef]);
 
   useEffect(() => {
     if (restoredRef.current) return;
@@ -259,6 +296,7 @@ export function useResizablePanel(options: UseResizablePanelOptions) {
   }, [restoreBodyState]);
 
   return {
+    commitWidth,
     isResizing,
     panelRef,
     reclampWidth,

@@ -901,14 +901,14 @@ pre, code {
   min-height: 35px;
 }
 
-/* 文档页底栏：细、弱化，不当第二条顶栏。 */
+/* 页签正下方细栏：弱化，不当第二条 36px 标题，也不贴窗口底。 */
 .file-viewer-statusbar {
   display: flex;
   align-items: center;
   gap: 8px;
   min-height: 24px;
   padding: 0 10px;
-  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg-panel) 88%, var(--bg));
   color: var(--text-dim);
   font-size: 11px;
@@ -1053,37 +1053,55 @@ pre, code {
   opacity: 0.55;
 }
 
-/* 文件区滚动条单独加粗：全局 4px 在长文档里几乎看不见，这里要能抓住、又不抢内容。 */
+/* 文件正文只藏横滚；纵向走共用 overlay 细条，不占 gutter。 */
 .file-viewer-content {
-  scrollbar-gutter: stable;
+  overflow-x: hidden;
+}
+
+/* Overlay 细滚动条：空闲透明，悬停该容器或正在滚动时才显现。 */
+.overlay-scroll {
   scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--text-muted) 70%, var(--border)) transparent;
+  scrollbar-color: transparent transparent;
 }
 
-.file-viewer-content::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+.overlay-scroll:hover,
+.overlay-scroll:focus-within,
+.overlay-scroll.is-scrolling {
+  scrollbar-color: color-mix(in srgb, var(--text-muted) 55%, transparent) transparent;
 }
 
-.file-viewer-content::-webkit-scrollbar-track {
-  background: color-mix(in srgb, var(--bg-panel) 88%, var(--border));
-  border-left: 1px solid var(--border);
+.overlay-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
 }
 
-.file-viewer-content::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--text-muted) 55%, var(--border));
-  border: 2px solid transparent;
-  border-radius: 8px;
-  background-clip: padding-box;
-}
-
-.file-viewer-content::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in srgb, var(--text) 35%, var(--accent));
-  background-clip: padding-box;
-}
-
-.file-viewer-content::-webkit-scrollbar-corner {
+.overlay-scroll::-webkit-scrollbar-track,
+.overlay-scroll::-webkit-scrollbar-corner {
   background: transparent;
+}
+
+.overlay-scroll::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 999px;
+}
+
+.overlay-scroll:hover::-webkit-scrollbar-thumb,
+.overlay-scroll:focus-within::-webkit-scrollbar-thumb,
+.overlay-scroll.is-scrolling::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text-muted) 50%, transparent);
+}
+
+.overlay-scroll::-webkit-scrollbar:horizontal {
+  height: 0;
+  display: none;
+}
+
+/* 历史抽屉宽只走 CSS 变量，避免 React 重绘把拖拽中的宽度写回去。 */
+[data-agent-history-drawer] {
+  width: 0;
+}
+[data-agent-history-drawer][data-agent-history-open] {
+  width: var(--agent-history-width, 240px);
 }
 
 .file-viewer-icon-button:disabled:hover {
@@ -1346,8 +1364,8 @@ span.token.table {
     transition: width 0.2s ease, min-width 0.2s ease;
   }
   .sidebar-container.sidebar-open {
-    width: var(--sidebar-width, 260px);
-    min-width: var(--sidebar-width, 260px);
+    width: var(--sidebar-width, 240px);
+    min-width: var(--sidebar-width, 240px);
   }
   .sidebar-container.sidebar-closed {
     width: 0;
@@ -1356,8 +1374,8 @@ span.token.table {
   }
   /* keep inner content at fixed width so it doesn't reflow during animation */
   .sidebar-container > * {
-    width: var(--sidebar-width, 260px);
-    min-width: var(--sidebar-width, 260px);
+    width: var(--sidebar-width, 240px);
+    min-width: var(--sidebar-width, 240px);
   }
   .sidebar-container.sidebar-resizing,
   .sidebar-container.sidebar-resizing > * {
@@ -1373,8 +1391,8 @@ span.token.table {
     flex-shrink: 0;
   }
   .right-panel-container.right-panel-open {
-    width: var(--right-panel-width, clamp(360px, 42vw, 640px));
-    min-width: 300px;
+    width: var(--right-panel-width, clamp(360px, 24vw, 420px));
+    min-width: 320px;
   }
   .right-panel-container.right-panel-closed {
     width: 0;
@@ -1383,8 +1401,8 @@ span.token.table {
   }
   /* keep inner content at fixed width so it doesn't reflow during animation */
   .right-panel-container > * {
-    width: var(--right-panel-width, clamp(360px, 42vw, 640px));
-    min-width: 300px;
+    width: var(--right-panel-width, clamp(360px, 24vw, 420px));
+    min-width: 320px;
   }
   .right-panel-container.right-panel-resizing,
   .right-panel-container.right-panel-resizing > * {

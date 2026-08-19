@@ -20,7 +20,7 @@ export function openFileTab(tabs: Tab[], input: OpenFileTabInput): Tab[] {
       initialDisplayMode: input.modeHint,
       viewerState: input.modeHint ? {
         displayMode: input.modeHint,
-        wrapLines: false,
+        wrapLines: true,
         scrollTop: 0,
         scrollLeft: 0,
       } : undefined,
@@ -42,7 +42,7 @@ export function openFileTab(tabs: Tab[], input: OpenFileTabInput): Tab[] {
       next.initialDisplayMode = input.modeHint;
       next.viewerState = {
         displayMode: input.modeHint,
-        wrapLines: tab.viewerState?.wrapLines ?? false,
+        wrapLines: true,
         scrollTop: 0,
         scrollLeft: 0,
       };

@@ -27,6 +27,7 @@ import { parseUnifiedPatch } from "@/lib/patch";
 import type { GitFileDiffResponse } from "@/lib/git-types";
 import { useI18n } from "@/hooks/useI18n";
 import { isVirtualFilePath } from "@/lib/virtual-files";
+import { markOverlayScrolling } from "@/lib/overlay-scroll";
 import {
   resolveInitialFileDisplayMode,
   type FileViewerDisplayMode as DisplayMode,
@@ -426,8 +427,8 @@ function DiffView({ patch }: { patch: string }) {
 }
 
 /**
- * 每个文档页底部的细状态栏：页签只负责导航，这里放「是否原文档」和审阅操作。
- * 刻意 24px、弱化色，避免再做成第二条顶栏。
+ * 贴在页签正下方的细状态栏（不是窗口底栏）：页签只导航，这里放原文档/预览和审阅操作。
+ * 刻意 24px、弱化色，避免再做成第二条 36px 标题。
  */
 function FileViewerStatusBar({
   meta,
@@ -531,8 +532,31 @@ function ImageViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      <FileViewerStatusBar
+        meta={(
+          <>
+            <span title={getRelativeFilePath(filePath, cwd)}>{t("files.docOnDisk")}</span>
+            <span>{t("files.docOriginal")}</span>
+            <span>{ext || "image"}</span>
+            {naturalSize && <span>{naturalSize.w} × {naturalSize.h}</span>}
+            {formatSizeStr && <span>{formatSizeStr}</span>}
+          </>
+        )}
+      >
+        <span
+          title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
+          aria-label={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
+          className="file-viewer-live-indicator"
+          style={{
+            background: watching ? "#4ade80" : "var(--border)",
+            boxShadow: watching ? "0 0 4px #4ade80" : "none",
+          }}
+        />
+        <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />
+      </FileViewerStatusBar>
       <div
-        className="file-viewer-content"
+        className="file-viewer-content overlay-scroll"
+        onScroll={(event) => markOverlayScrolling(event.currentTarget)}
         style={{
           flex: 1,
           overflow: "auto",
@@ -568,28 +592,6 @@ function ImageViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
           />
         )}
       </div>
-      <FileViewerStatusBar
-        meta={(
-          <>
-            <span title={getRelativeFilePath(filePath, cwd)}>{t("files.docOnDisk")}</span>
-            <span>{t("files.docOriginal")}</span>
-            <span>{ext || "image"}</span>
-            {naturalSize && <span>{naturalSize.w} × {naturalSize.h}</span>}
-            {formatSizeStr && <span>{formatSizeStr}</span>}
-          </>
-        )}
-      >
-        <span
-          title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
-          aria-label={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
-          className="file-viewer-live-indicator"
-          style={{
-            background: watching ? "#4ade80" : "var(--border)",
-            boxShadow: watching ? "0 0 4px #4ade80" : "none",
-          }}
-        />
-        <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />
-      </FileViewerStatusBar>
     </div>
   );
 }
@@ -687,6 +689,28 @@ function AudioViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      <FileViewerStatusBar
+        meta={(
+          <>
+            <span title={getRelativeFilePath(filePath, cwd)}>{t("files.docOnDisk")}</span>
+            <span>{t("files.docOriginal")}</span>
+            <span>{ext || "audio"}</span>
+            {duration != null && <span>{formatDuration(duration)}</span>}
+            {size != null && <span>{formatSize(size)}</span>}
+          </>
+        )}
+      >
+        <span
+          title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
+          aria-label={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
+          className="file-viewer-live-indicator"
+          style={{
+            background: watching ? "#4ade80" : "var(--border)",
+            boxShadow: watching ? "0 0 4px #4ade80" : "none",
+          }}
+        />
+        <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />
+      </FileViewerStatusBar>
       <div
         style={{
           flex: 1,
@@ -714,28 +738,6 @@ function AudioViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
           />
         </div>
       </div>
-      <FileViewerStatusBar
-        meta={(
-          <>
-            <span title={getRelativeFilePath(filePath, cwd)}>{t("files.docOnDisk")}</span>
-            <span>{t("files.docOriginal")}</span>
-            <span>{ext || "audio"}</span>
-            {duration != null && <span>{formatDuration(duration)}</span>}
-            {size != null && <span>{formatSize(size)}</span>}
-          </>
-        )}
-      >
-        <span
-          title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
-          aria-label={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
-          className="file-viewer-live-indicator"
-          style={{
-            background: watching ? "#4ade80" : "var(--border)",
-            boxShadow: watching ? "0 0 4px #4ade80" : "none",
-          }}
-        />
-        <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />
-      </FileViewerStatusBar>
     </div>
   );
 }
@@ -857,21 +859,6 @@ function DocumentViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }:
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
-      <div style={{ flex: 1, minHeight: 0, background: "var(--bg-panel)" }}>
-        {error ? (
-          <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, color: "#f87171", fontSize: 13, textAlign: "center" }}>
-            {error}
-          </div>
-        ) : (
-          <iframe
-            key={previewUrl}
-            src={previewUrl}
-            sandbox={isPdf ? undefined : "allow-same-origin"}
-            title={t("i18n.previewFile", { file: getFileName(filePath) })}
-            style={{ width: "100%", height: "100%", border: "none", background: isPdf ? "var(--bg)" : "#eef1f5" }}
-          />
-        )}
-      </div>
       <FileViewerStatusBar
         meta={(
           <>
@@ -893,6 +880,21 @@ function DocumentViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }:
         />
         <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />
       </FileViewerStatusBar>
+      <div style={{ flex: 1, minHeight: 0, background: "var(--bg-panel)" }}>
+        {error ? (
+          <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, color: "#f87171", fontSize: 13, textAlign: "center" }}>
+            {error}
+          </div>
+        ) : (
+          <iframe
+            key={previewUrl}
+            src={previewUrl}
+            sandbox={isPdf ? undefined : "allow-same-origin"}
+            title={t("i18n.previewFile", { file: getFileName(filePath) })}
+            style={{ width: "100%", height: "100%", border: "none", background: isPdf ? "var(--bg)" : "#eef1f5" }}
+          />
+        )}
+      </div>
     </div>
   );
 }
@@ -961,11 +963,11 @@ function TextFileViewer({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const requestedInitialDisplayMode = resolveInitialFileDisplayMode(initialState, initialDisplayMode);
-  const initialWrapLines = initialState?.wrapLines ?? false;
+  // 审阅默认折行：不再提供开关，也不恢复旧页签里 wrapLines: false。
+  const wrapLines = true;
   const initialScrollTop = initialState?.scrollTop ?? 0;
   const initialScrollLeft = initialState?.scrollLeft ?? 0;
   const [displayMode, setDisplayMode] = useState<DisplayMode>(requestedInitialDisplayMode);
-  const [wrapLines, setWrapLines] = useState(initialWrapLines);
   const [watching, setWatching] = useState(false);
   const esRef = useRef<EventSource | null>(null);
   const contentRequestRef = useRef(0);
@@ -978,7 +980,7 @@ function TextFileViewer({
   const scrollRestorePendingRef = useRef(true);
   const viewerStateRef = useRef<FileViewerState>({
     displayMode: requestedInitialDisplayMode,
-    wrapLines: initialWrapLines,
+    wrapLines: true,
     scrollTop: initialScrollTop,
     scrollLeft: initialScrollLeft,
   });
@@ -992,18 +994,10 @@ function TextFileViewer({
     setDisplayMode(nextDisplayMode);
   }, []);
 
-  const toggleWrapLines = useCallback(() => {
-    setWrapLines((current) => {
-      const next = !current;
-      viewerStateRef.current.wrapLines = next;
-      return next;
-    });
-  }, []);
-
   useEffect(() => {
     const nextState: FileViewerState = {
       displayMode: requestedInitialDisplayMode,
-      wrapLines: initialWrapLines,
+      wrapLines: true,
       scrollTop: initialScrollTop,
       scrollLeft: initialScrollLeft,
     };
@@ -1012,7 +1006,6 @@ function TextFileViewer({
     scrollRestorePendingRef.current = true;
     autoDiffAppliedRef.current = false;
     setDisplayMode(requestedInitialDisplayMode);
-    setWrapLines(initialWrapLines);
 
     return () => {
       onStateChangeRef.current?.({ ...viewerStateRef.current });
@@ -1021,7 +1014,6 @@ function TextFileViewer({
     filePath,
     sourceSessionId,
     requestedInitialDisplayMode,
-    initialWrapLines,
     initialScrollTop,
     initialScrollLeft,
   ]);
@@ -1365,29 +1357,6 @@ function TextFileViewer({
                 <MentionIcon />
               </button>
             )}
-            {effectiveDisplayMode === "source" && (
-              <>
-                <button
-                  type="button"
-                  onClick={toggleWrapLines}
-                  title={wrapLines ? t("i18n.disableWrap") : t("i18n.enableWrap")}
-                  aria-label={wrapLines ? t("i18n.disableWrap") : t("i18n.enableWrap")}
-                  aria-pressed={wrapLines}
-                  className="file-viewer-icon-button"
-                  style={{
-                    background: wrapLines ? "var(--bg-selected)" : "transparent",
-                    color: wrapLines ? "var(--text)" : "var(--text-muted)",
-                  }}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M3 6h18" />
-                    <path d="M3 12h15a3 3 0 1 1 0 6h-4" />
-                    <path d="m16 16-2 2 2 2" />
-                    <path d="M3 18h7" />
-                  </svg>
-                </button>
-              </>
-            )}
           </div>
 
           {!isDeletedDiff && <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />}
@@ -1396,15 +1365,27 @@ function TextFileViewer({
 
   return (
     <div className="file-viewer-shell" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      <FileViewerStatusBar
+        meta={(
+          <>
+            <span title={getRelativeFilePath(filePath, cwd)}>{originLabel}</span>
+            <span>{viewLabel}</span>
+            <span>{language}</span>
+          </>
+        )}
+      >
+        {toolbarControls}
+      </FileViewerStatusBar>
       {/* Content area */}
       <div
         ref={contentRef}
-        className="file-viewer-content"
+        className="file-viewer-content overlay-scroll"
         onScroll={(event) => {
+          markOverlayScrolling(event.currentTarget);
           viewerStateRef.current.scrollTop = event.currentTarget.scrollTop;
           viewerStateRef.current.scrollLeft = event.currentTarget.scrollLeft;
         }}
-        style={{ flex: 1, overflow: "auto", background: "var(--bg)" }}
+        style={{ flex: 1, overflowX: "hidden", overflowY: "auto", background: "var(--bg)" }}
       >
         {effectiveDisplayMode === "diff" && hasGitDiff ? (
           <DiffView patch={gitDiff.patch!} />
@@ -1483,7 +1464,7 @@ function TextFileViewer({
           </div>
         ) : (
           <SyntaxHighlighter
-            className={wrapLines ? "file-source-view is-wrapped" : "file-source-view"}
+            className="file-source-view is-wrapped"
             language={language === "text" ? "plaintext" : language}
             style={isDark ? vscDarkPlus : vs}
             showLineNumbers
@@ -1496,8 +1477,9 @@ function TextFileViewer({
               border: 0,
               background: "var(--bg)",
               ...FILE_CODE_STYLE,
-              width: wrapLines ? "100%" : "max-content",
-              minWidth: "100%",
+              width: "100%",
+              minWidth: 0,
+              maxWidth: "100%",
               minHeight: "100%",
               overflow: "visible",
             }}
@@ -1516,17 +1498,6 @@ function TextFileViewer({
           </SyntaxHighlighter>
         )}
       </div>
-      <FileViewerStatusBar
-        meta={(
-          <>
-            <span title={getRelativeFilePath(filePath, cwd)}>{originLabel}</span>
-            <span>{viewLabel}</span>
-            <span>{language}</span>
-          </>
-        )}
-      >
-        {toolbarControls}
-      </FileViewerStatusBar>
     </div>
   );
 }

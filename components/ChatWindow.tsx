@@ -24,6 +24,7 @@ import {
   restoreScrollTop,
   VISIBLE_PAGE_SIZE,
 } from "@/lib/chat-lazy-load";
+import { markOverlayScrolling } from "@/lib/overlay-scroll";
 
 interface Props {
   session: SessionInfo | null;
@@ -702,7 +703,11 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
       ) : (
       <>
       <div className="relative flex min-w-0 flex-1 overflow-hidden">
-        <div ref={scrollContainerRef} className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto pt-4 [scrollbar-width:none]">
+        <div
+          ref={scrollContainerRef}
+          className="overlay-scroll min-w-0 flex-1 overflow-x-hidden overflow-y-auto pt-4"
+          onScroll={(event) => markOverlayScrolling(event.currentTarget)}
+        >
           <div style={{ minWidth: 0, padding: `0 ${CHAT_COLUMN_PADDING}px` }}>
             <div ref={messageContentRef} style={{ width: "100%", minWidth: 0, maxWidth: 820, margin: "0 auto" }}>
             {(() => {

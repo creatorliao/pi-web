@@ -99,6 +99,7 @@ export const enLocale: LocalePlugin = {
     "layout.resizeSidebar": "Resize sidebar",
     "layout.resizeFilePanel": "Resize side panel",
     "layout.resizeAgentPanel": "Resize chat panel",
+    "layout.resizeHistory": "Resize chat list",
     "layout.resizeHint": "Drag to resize. Double-click or press Enter to reset.",
     "sidebar.new": "New chat",
     "chat.historyList": "Chats",

@@ -90,6 +90,11 @@ test("every explicit diff activation resets the mode and increments the revision
   assert.equal(second[0].viewerState.displayMode, "diff");
 });
 
+test("new tabs default to wrapped source", () => {
+  const [next] = openFileTab([], { ...openA, modeHint: "diff" });
+  assert.equal(next.viewerState.wrapLines, true);
+});
+
 test("a remounted viewer ignores the previous revision's late cleanup", () => {
   const reopened = openFileTab([tabA], { ...openA, modeHint: "diff" });
   const stale = saveFileViewerState(reopened, tabA.id, 0, tabA.viewerState);
