@@ -217,6 +217,53 @@ Location: `~/.pi/agent/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl`
 --font-mono
 ```
 
+---
+
+## docs / PARA 落盘约定
+
+`docs/` 是 PARA 根，下面只有四维目录：`01-Projects`、`02-Areas`、`03-Resources`、`04-Archives`。在这些目录里写文档时按下面执行，避免再理解成「先建主题夹再塞文件」。
+
+### 编号
+
+人工新建的调查报告、规范、笔记、领域文档，文件名必须带 **日期 + 当日序号**：
+
+```text
+YYYYMMDD-xx-主题.md
+```
+
+- `YYYYMMDD`：创建日（本机日历）
+- `xx`：该四维目录下**同一天**已有同前缀文件的下一号，两位，从 `01` 起
+- 主题用简短中文或英文，不要再套「调查报告_」一层目录
+
+示例（正确）：
+
+```text
+docs/02-Areas/20260819-01-pi-web与本机pi内核关系.md
+docs/02-Areas/20260819-02-另一主题.md
+```
+
+落盘前先列出目标四维目录根下已有的 `YYYYMMDD-*.md`，再取当日最大序号 + 1。
+
+### 禁止再嵌套子文件夹
+
+**四维目录的根下直接放文件，不要再 mkdir 一层。**
+
+| 不要 | 要 |
+|------|----|
+| `docs/02-Areas/20260819-01-主题/调查报告.md` | `docs/02-Areas/20260819-01-主题.md` |
+| `docs/02-Areas/20260819-01-主题/` 空夹或再套子夹 | 单个 `.md` 落在 `02-Areas/` |
+| 为「一套报告」再建 `00-README` / `01-…` 子目录 | 需要多份时：同目录下多个 `YYYYMMDD-xx-….md`，或同一文件加章节 |
+
+对 `01-Projects`、`03-Resources`、`04-Archives` 同样适用：不要在 PARA 四维目录内再嵌套主题子文件夹。
+
+`.gitkeep` 与 `docs/README.md` 是脚手架，不要删、不要挪进子夹。
+
+### 和 `para-structure cp` 的边界
+
+日常写调查报告、规范、笔记：**不要**调用 `para-structure cp`，也**不要**手建 `R{YYYYMMDD}-xx-标题/` 项目夹。
+
+只有用户**明确**说「用 para 建项目目录 / para-structure cp」时，才允许 `01-Projects` 下出现 CLI 生成的项目文件夹。
+
 <!-- BEGIN:nextjs-agent-rules -->
 
 # This is NOT the Next.js you know
