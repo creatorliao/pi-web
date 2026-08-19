@@ -36,6 +36,16 @@ for (const [name, nextName] of [
   });
 }
 
+test("TextFileViewer no longer paints a stacked file-name title", () => {
+  const block = functionBlock("TextFileViewer", null);
+  assert.doesNotMatch(block, /file-viewer-path/);
+  assert.doesNotMatch(block, /file-viewer-meta/);
+  assert.doesNotMatch(block, /createPortal\(/);
+  assert.match(block, /<FileViewerStatusBar/);
+  assert.match(block, /files\.docOriginal/);
+  assert.match(block, /files\.docPreview/);
+});
+
 test("FileViewer forwards watcher state to every viewer implementation", () => {
   const block = functionBlock("FileViewer", "TextFileViewer");
   assert.equal(block.match(/watchEnabled=\{watchEnabled\}/g)?.length, 4);
@@ -70,4 +80,5 @@ test("markdown table tokens stay inline despite Tailwind's table utility", () =>
 
   assert.match(html, /class="token table[ "]/);
   assert.match(cssSource, /span\.token\.table\s*\{[^}]*display:\s*inline;/);
+  assert.match(cssSource, /\.file-viewer-statusbar\s*\{/);
 });

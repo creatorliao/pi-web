@@ -901,6 +901,57 @@ pre, code {
   min-height: 35px;
 }
 
+/* 文档页底栏：细、弱化，不当第二条顶栏。 */
+.file-viewer-statusbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  padding: 0 10px;
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-panel) 88%, var(--bg));
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.file-viewer-statusbar-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.file-viewer-statusbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.file-viewer-statusbar .file-viewer-mode-switch {
+  height: 20px;
+  border-color: color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.file-viewer-statusbar .file-viewer-mode-button {
+  height: 18px;
+  padding: 0 6px;
+  font-weight: 400;
+}
+
+.file-viewer-statusbar .file-viewer-icon-button {
+  width: 20px;
+  height: 20px;
+  flex-basis: 20px;
+  border-color: color-mix(in srgb, var(--border) 80%, transparent);
+}
+
 .file-viewer-path {
   flex: 1 1 auto;
   min-width: 48px;
@@ -929,6 +980,11 @@ pre, code {
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
+}
+
+.file-viewer-statusbar .file-viewer-actions {
+  order: 0;
+  height: 20px;
 }
 
 .file-viewer-actions {
@@ -995,6 +1051,39 @@ pre, code {
   color: var(--text-dim);
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+/* 文件区滚动条单独加粗：全局 4px 在长文档里几乎看不见，这里要能抓住、又不抢内容。 */
+.file-viewer-content {
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text-muted) 70%, var(--border)) transparent;
+}
+
+.file-viewer-content::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.file-viewer-content::-webkit-scrollbar-track {
+  background: color-mix(in srgb, var(--bg-panel) 88%, var(--border));
+  border-left: 1px solid var(--border);
+}
+
+.file-viewer-content::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text-muted) 55%, var(--border));
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background-clip: padding-box;
+}
+
+.file-viewer-content::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text) 35%, var(--accent));
+  background-clip: padding-box;
+}
+
+.file-viewer-content::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 .file-viewer-icon-button:disabled:hover {

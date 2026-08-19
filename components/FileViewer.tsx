@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback, useMemo, type CSSProperties, type MouseEvent } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import {
   Prism as SyntaxHighlighter,
   createElement as renderSyntaxNode,
@@ -425,6 +425,25 @@ function DiffView({ patch }: { patch: string }) {
   );
 }
 
+/**
+ * 每个文档页底部的细状态栏：页签只负责导航，这里放「是否原文档」和审阅操作。
+ * 刻意 24px、弱化色，避免再做成第二条顶栏。
+ */
+function FileViewerStatusBar({
+  meta,
+  children,
+}: {
+  meta: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="file-viewer-statusbar" data-file-statusbar="">
+      <div className="file-viewer-statusbar-meta">{meta}</div>
+      {children ? <div className="file-viewer-statusbar-actions">{children}</div> : null}
+    </div>
+  );
+}
+
 function ImageViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Props) {
   const { t } = useI18n();
   const [watching, setWatching] = useState(false);
@@ -513,43 +532,6 @@ function ImageViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
       <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-          padding: "4px 16px",
-          borderBottom: "1px solid var(--border)",
-          fontSize: 11,
-          color: "var(--text-dim)",
-          background: "var(--bg)",
-          flexShrink: 0,
-        }}
-      >
-        <span style={{ fontFamily: "var(--font-mono)" }} title={filePath}>
-          {getRelativeFilePath(filePath, cwd)}
-        </span>
-        <span style={{ marginLeft: "auto" }}>{ext || "image"}</span>
-        {naturalSize && <span>{naturalSize.w} × {naturalSize.h}</span>}
-        {formatSizeStr && <span>{formatSizeStr}</span>}
-        <span
-          title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
-          style={{ display: "flex", alignItems: "center", gap: 4, color: watching ? "#4ade80" : "var(--text-dim)" }}
-        >
-          <span
-            style={{
-              width: 7,
-              height: 7,
-              borderRadius: "50%",
-              background: watching ? "#4ade80" : "var(--border)",
-              display: "inline-block",
-              boxShadow: watching ? "0 0 4px #4ade80" : "none",
-            }}
-          />
-          {watching ? "live" : "static"}
-        </span>
-        <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />
-      </div>
-      <div
         className="file-viewer-content"
         style={{
           flex: 1,
@@ -586,6 +568,28 @@ function ImageViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
           />
         )}
       </div>
+      <FileViewerStatusBar
+        meta={(
+          <>
+            <span title={getRelativeFilePath(filePath, cwd)}>{t("files.docOnDisk")}</span>
+            <span>{t("files.docOriginal")}</span>
+            <span>{ext || "image"}</span>
+            {naturalSize && <span>{naturalSize.w} × {naturalSize.h}</span>}
+            {formatSizeStr && <span>{formatSizeStr}</span>}
+          </>
+        )}
+      >
+        <span
+          title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
+          aria-label={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
+          className="file-viewer-live-indicator"
+          style={{
+            background: watching ? "#4ade80" : "var(--border)",
+            boxShadow: watching ? "0 0 4px #4ade80" : "none",
+          }}
+        />
+        <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />
+      </FileViewerStatusBar>
     </div>
   );
 }
@@ -685,43 +689,6 @@ function AudioViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
       <div
         style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-          padding: "4px 16px",
-          borderBottom: "1px solid var(--border)",
-          fontSize: 11,
-          color: "var(--text-dim)",
-          background: "var(--bg)",
-          flexShrink: 0,
-        }}
-      >
-        <span style={{ fontFamily: "var(--font-mono)" }} title={filePath}>
-          {getRelativeFilePath(filePath, cwd)}
-        </span>
-        <span style={{ marginLeft: "auto" }}>{ext || "audio"}</span>
-        {duration != null && <span>{formatDuration(duration)}</span>}
-        {size != null && <span>{formatSize(size)}</span>}
-        <span
-          title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
-          style={{ display: "flex", alignItems: "center", gap: 4, color: watching ? "#4ade80" : "var(--text-dim)" }}
-        >
-          <span
-            style={{
-              width: 7,
-              height: 7,
-              borderRadius: "50%",
-              background: watching ? "#4ade80" : "var(--border)",
-              display: "inline-block",
-              boxShadow: watching ? "0 0 4px #4ade80" : "none",
-            }}
-          />
-          {watching ? "live" : "static"}
-        </span>
-        <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />
-      </div>
-      <div
-        style={{
           flex: 1,
           display: "flex",
           alignItems: "center",
@@ -747,6 +714,28 @@ function AudioViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
           />
         </div>
       </div>
+      <FileViewerStatusBar
+        meta={(
+          <>
+            <span title={getRelativeFilePath(filePath, cwd)}>{t("files.docOnDisk")}</span>
+            <span>{t("files.docOriginal")}</span>
+            <span>{ext || "audio"}</span>
+            {duration != null && <span>{formatDuration(duration)}</span>}
+            {size != null && <span>{formatSize(size)}</span>}
+          </>
+        )}
+      >
+        <span
+          title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
+          aria-label={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
+          className="file-viewer-live-indicator"
+          style={{
+            background: watching ? "#4ade80" : "var(--border)",
+            boxShadow: watching ? "0 0 4px #4ade80" : "none",
+          }}
+        />
+        <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />
+      </FileViewerStatusBar>
     </div>
   );
 }
@@ -868,42 +857,6 @@ function DocumentViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }:
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-          padding: "4px 16px",
-          borderBottom: "1px solid var(--border)",
-          fontSize: 11,
-          color: "var(--text-dim)",
-          background: "var(--bg)",
-          flexShrink: 0,
-        }}
-      >
-        <span style={{ fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={filePath}>
-          {getRelativeFilePath(filePath, cwd)}
-        </span>
-        <span style={{ marginLeft: "auto" }}>{ext === "docx" ? "docx preview" : "pdf"}</span>
-        {size != null && <span>{formatSize(size)}</span>}
-        <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />
-        <span
-          title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
-          style={{ display: "flex", alignItems: "center", gap: 4, color: watching ? "#4ade80" : "var(--text-dim)", flexShrink: 0 }}
-        >
-          <span
-            style={{
-              width: 7,
-              height: 7,
-              borderRadius: "50%",
-              background: watching ? "#4ade80" : "var(--border)",
-              display: "inline-block",
-              boxShadow: watching ? "0 0 4px #4ade80" : "none",
-            }}
-          />
-          {watching ? "live" : "static"}
-        </span>
-      </div>
       <div style={{ flex: 1, minHeight: 0, background: "var(--bg-panel)" }}>
         {error ? (
           <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, color: "#f87171", fontSize: 13, textAlign: "center" }}>
@@ -919,6 +872,27 @@ function DocumentViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }:
           />
         )}
       </div>
+      <FileViewerStatusBar
+        meta={(
+          <>
+            <span title={getRelativeFilePath(filePath, cwd)}>{t("files.docOnDisk")}</span>
+            <span>{t("files.docPreview")}</span>
+            <span>{ext === "docx" ? "docx" : "pdf"}</span>
+            {size != null && <span>{formatSize(size)}</span>}
+          </>
+        )}
+      >
+        <span
+          title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
+          aria-label={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
+          className="file-viewer-live-indicator"
+          style={{
+            background: watching ? "#4ade80" : "var(--border)",
+            boxShadow: watching ? "0 0 4px #4ade80" : "none",
+          }}
+        />
+        <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />
+      </FileViewerStatusBar>
     </div>
   );
 }
@@ -1311,7 +1285,6 @@ function TextFileViewer({
   const isMarkdown = language === "markdown";
   const hasPreview = isHtml || isMarkdown;
   const markdownDirectory = getFileDirectory(filePath);
-  const lines = content.split("\n");
   const effectiveDisplayMode = isDeletedDiff ? "diff" : displayMode;
   const displayModes: DisplayMode[] = isDeletedDiff
     ? ["diff"]
@@ -1320,44 +1293,27 @@ function TextFileViewer({
         ...(hasPreview ? ["preview" as const] : []),
         ...(hasGitDiff ? ["diff" as const] : []),
       ];
-  const metadata = isDeletedDiff
-    ? t("files.deleted")
-    : `${language} · ${lines.length} lines · ${formatSize(data!.size)}`;
-
-  return (
-    <div className="file-viewer-shell" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
-      <div
-        className="file-viewer-toolbar"
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          padding: "5px 12px",
-          borderBottom: "1px solid var(--border)",
-          fontSize: 11,
-          color: "var(--text-dim)",
-          background: "var(--bg)",
-          flexShrink: 0,
-        }}
-      >
-        <span className="file-viewer-path" style={{ fontFamily: "var(--font-mono)" }} title={filePath}>
-          {getRelativeFilePath(filePath, cwd)}
-        </span>
-
-        <span className="file-viewer-meta" title={metadata}>{metadata}</span>
-        {!isDeletedDiff && (
-          <span
-            title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
-            aria-label={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
-            className="file-viewer-live-indicator"
-            style={{
-              background: watching ? "#4ade80" : "var(--border)",
-              boxShadow: watching ? "0 0 4px #4ade80" : "none",
-            }}
-          />
-        )}
-
-        <div className="file-viewer-controls">
+  // 文件名只出现在页签上；审阅操作和「是否原文档」放底部细栏。
+  const isGenerated = virtualContent !== undefined || isVirtualFilePath(filePath);
+  const originLabel = isGenerated ? t("files.docGenerated") : t("files.docOnDisk");
+  const viewLabel = effectiveDisplayMode === "preview"
+    ? t("files.docPreview")
+    : effectiveDisplayMode === "diff"
+      ? t("files.docDiff")
+      : t("files.docOriginal");
+  const toolbarControls = (
+        <div className="file-viewer-controls" data-file-chrome-controls="">
+          {!isDeletedDiff && (
+            <span
+              title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
+              aria-label={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
+              className="file-viewer-live-indicator"
+              style={{
+                background: watching ? "#4ade80" : "var(--border)",
+                boxShadow: watching ? "0 0 4px #4ade80" : "none",
+              }}
+            />
+          )}
           {displayModes.length > 1 && (
             <div className="file-viewer-mode-switch" aria-label={t("i18n.fileViewMode")}>
               {displayModes.map((mode) => {
@@ -1436,8 +1392,10 @@ function TextFileViewer({
 
           {!isDeletedDiff && <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />}
         </div>
-      </div>
+  );
 
+  return (
+    <div className="file-viewer-shell" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
       {/* Content area */}
       <div
         ref={contentRef}
@@ -1558,6 +1516,17 @@ function TextFileViewer({
           </SyntaxHighlighter>
         )}
       </div>
+      <FileViewerStatusBar
+        meta={(
+          <>
+            <span title={getRelativeFilePath(filePath, cwd)}>{originLabel}</span>
+            <span>{viewLabel}</span>
+            <span>{language}</span>
+          </>
+        )}
+      >
+        {toolbarControls}
+      </FileViewerStatusBar>
     </div>
   );
 }

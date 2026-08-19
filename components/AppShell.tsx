@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect, useLayoutEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useLayoutEffect, type CSSProperties } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { SessionSidebar } from "./SessionSidebar";
@@ -61,6 +61,8 @@ type AutoNameStatus =
   | { kind: "error"; message: string };
 
 const TOP_BAR_ICON_BUTTON_SIZE = 36;
+/** 对话列表抽屉固定宽度（D7）。 */
+const AGENT_HISTORY_DRAWER_WIDTH = 240;
 /** 侧栏窄于此时「设置」只显示齿轮，避免挤掉标签。 */
 const SETTINGS_LABEL_MIN_WIDTH = 220;
 
@@ -75,7 +77,8 @@ export function AppShell() {
   // 手机保持「中间对话」；桌面才按设置换槽。
   const isEditorLayout = !isMobile && layoutMode === "editor";
   const [sessionListHost, setSessionListHost] = useState<HTMLDivElement | null>(null);
-  const [agentHistoryOpen, setAgentHistoryOpen] = useState(true);
+  // 默认收起：对齐 Cursor，先看当前对话，点侧栏图标再抽出列表。
+  const [agentHistoryOpen, setAgentHistoryOpen] = useState(false);
   useViewportHeight();
   // Audio ownership lives here (not in ChatWindow) so the completion tone can
   // also fire for tasks finishing in a non-active workspace whose ChatWindow
@@ -620,6 +623,7 @@ export function AppShell() {
   const handleSelectSession = useCallback((session: SessionInfo, isRestore = false) => {
     invalidateWorkspaceRestore();
     activeNewSessionDraftKeyRef.current = null;
+    // D4：点列表某条后抽屉保持打开，方便连续切换。
     // Re-clicking the already-open session must not remount the chat and
     // re-run the full load/positioning cycle. Only skip when the effective
     // cwd context already matches — otherwise a pending cwd move still needs
@@ -1644,6 +1648,84 @@ export function AppShell() {
     );
   };
 
+  /**
+   * 对话入口：+ 新建；侧栏面板开关列表抽屉。
+   * 编辑器挂在对话栏顶；助手挂在中间主顶栏最右。不挂文件页签行。
+   */
+  const renderWorkspaceChatActions = (opts?: { pullRight?: boolean }) => {
+    const canStart = Boolean(activeCwd || selectedSession?.cwd);
+    const startNewConversation = () => {
+      const cwd = activeCwd ?? selectedSession?.cwd;
+      if (!cwd) return;
+      // 编辑器下对话在右侧；若面板关着，新建/看历史时先打开，否则用户看不到结果。
+      if (isEditorLayout) setRightPanelOpen(true);
+      const tempId = typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+      handleNewSession(tempId, cwd);
+    };
+    const toggleHistory = () => {
+      if (isEditorLayout) setRightPanelOpen(true);
+      setAgentHistoryOpen((open) => !open);
+    };
+    const iconButtonStyle = (active: boolean, enabled: boolean): CSSProperties => ({
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      width: TOP_BAR_ICON_BUTTON_SIZE,
+      height: TOP_BAR_ICON_BUTTON_SIZE,
+      padding: 0,
+      background: active ? "var(--bg-selected)" : "none",
+      border: "none",
+      borderLeft: "1px solid var(--border)",
+      color: enabled ? (active ? "var(--text)" : "var(--text-muted)") : "var(--text-dim)",
+      cursor: enabled ? "pointer" : "not-allowed",
+      flexShrink: 0,
+      transition: "color 0.12s, background 0.12s",
+    });
+
+    return (
+      <div
+        data-workspace-chat-actions=""
+        style={{
+          display: "flex",
+          alignItems: "stretch",
+          flexShrink: 0,
+          marginLeft: opts?.pullRight ? "auto" : 0,
+        }}
+      >
+        <button
+          type="button"
+          data-workspace-new-chat=""
+          onClick={startNewConversation}
+          disabled={!canStart}
+          title={translate("sidebar.new")}
+          aria-label={translate("sidebar.new")}
+          style={iconButtonStyle(false, canStart)}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          data-workspace-chat-history=""
+          onClick={toggleHistory}
+          aria-pressed={agentHistoryOpen}
+          title={translate(agentHistoryOpen ? "chat.hideHistory" : "chat.historyList")}
+          aria-label={translate(agentHistoryOpen ? "chat.hideHistory" : "chat.historyList")}
+          style={iconButtonStyle(agentHistoryOpen, true)}
+        >
+          {/* D2：列表用侧栏面板图，不用时钟。 */}
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="3" y="3" width="18" height="18" rx="2" /><line x1="9" y1="3" x2="9" y2="21" />
+          </svg>
+        </button>
+      </div>
+    );
+  };
+
   const renderMainFileToggle = (mobile: boolean) => {
     const covered = mobile && mobileToolbarMoreOpen;
     return (
@@ -1663,7 +1745,7 @@ export function AppShell() {
           : translate(isEditorLayout ? "files.showAgentPanel" : "files.showPanel")}
         data-mobile-toolbar-file={mobile ? "true" : undefined}
         style={{
-          marginLeft: !mobile && !sessionStats && !contextUsage ? "auto" : 0,
+          marginLeft: 0,
           display: "flex", alignItems: "center", justifyContent: "center",
           width: TOP_BAR_ICON_BUTTON_SIZE, height: TOP_BAR_ICON_BUTTON_SIZE, padding: 0,
           visibility: covered ? "hidden" : "visible",
@@ -1683,29 +1765,58 @@ export function AppShell() {
     );
   };
 
+  /**
+   * 编辑器桌面把页签并入中间主顶栏（与「会话」同行），避免再画一行 36px 空标题。
+   * 助手/手机仍由文件列自己画页签头。
+   */
+  const mergeFileTabsIntoMainTopBar = isEditorLayout && !isMobile;
+
+  /**
+   * 文件页签 +（可选）收紧右侧。审阅按钮不进这一行，避免和导航抢位。
+   */
+  const renderFileTabStrip = (includeCollapse: boolean) => (
+    <>
+      <div
+        data-file-tab-strip=""
+        data-main-file-tabs={includeCollapse ? "" : undefined}
+        style={{ flex: 1, overflow: "hidden", minWidth: 0, height: "100%" }}
+      >
+        <TabBar
+          tabs={fileTabs}
+          activeTabId={activeFileTabId ?? ""}
+          onSelectTab={setActiveFileTabId}
+          onCloseTab={handleCloseFileTab}
+        />
+      </div>
+      {/* 与「会话」同行最右：收紧整块右侧对话栏（右轨图标，区别于对话栏列表键）。 */}
+      {includeCollapse && (
+        <div data-collapse-right-panel="">
+          {renderMainFileToggle(false)}
+        </div>
+      )}
+    </>
+  );
+
   const fileWorkspace = (
     <div
       data-workspace="files"
       style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0, background: "var(--bg)" }}
     >
-      <div style={{
-        display: "flex",
-        alignItems: "center",
-        flexShrink: 0,
-        height: 36,
-        background: "var(--bg-panel)",
-        borderBottom: "1px solid var(--border)",
-      }}>
-        <div style={{ flex: 1, overflow: "hidden" }}>
-          <TabBar
-            tabs={fileTabs}
-            activeTabId={activeFileTabId ?? ""}
-            onSelectTab={setActiveFileTabId}
-            onCloseTab={handleCloseFileTab}
-          />
+      {/* 编辑器桌面页签已并入主顶栏，这里不再画第二行标题。 */}
+      {!mergeFileTabsIntoMainTopBar && (
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          flexShrink: 0,
+          height: 36,
+          background: "var(--bg-panel)",
+          borderBottom: "1px solid var(--border)",
+        }}>
+          {renderFileTabStrip(false)}
         </div>
-      </div>
+      )}
       <div style={{ flex: 1, overflow: "hidden", paddingBottom: "env(safe-area-inset-bottom)" }}>
+        {/* Only the active viewer is mounted; tab state is restored via initialState. */}
         {activeFileTab?.filePath ? (
           <FileViewer
             key={`${activeFileTab.id}:${activeFileTab.viewerRevision ?? 0}`}
@@ -1744,76 +1855,30 @@ export function AppShell() {
       data-workspace="agent"
       style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}
     >
-      {!isMobile && (
-        <div style={{
-          display: "flex",
-          alignItems: "center",
-          flexShrink: 0,
-          height: 36,
-          background: "var(--bg-panel)",
-          borderBottom: "1px solid var(--border)",
-          gap: 6,
-          padding: "0 8px",
-        }}>
-          <button
-            type="button"
-            onClick={() => {
-              const cwd = activeCwd ?? selectedSession?.cwd;
-              if (!cwd) return;
-              const tempId = typeof crypto.randomUUID === "function"
-                ? crypto.randomUUID()
-                : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-              handleNewSession(tempId, cwd);
-            }}
-            disabled={!activeCwd && !selectedSession?.cwd}
-            title={translate("sidebar.new")}
-            style={{
-              display: "flex", alignItems: "center", gap: 5,
-              height: 26, padding: "0 10px",
-              background: "var(--bg-hover)",
-              border: "1px solid var(--border)",
-              borderRadius: 7,
-              color: (activeCwd || selectedSession?.cwd) ? "var(--text)" : "var(--text-dim)",
-              cursor: (activeCwd || selectedSession?.cwd) ? "pointer" : "not-allowed",
-              fontSize: 12,
-            }}
-          >
-            <span aria-hidden="true">+</span>
-            {translate("sidebar.new")}
-          </button>
-          <button
-            type="button"
-            onClick={() => setAgentHistoryOpen((open) => !open)}
-            aria-pressed={agentHistoryOpen}
-            title={translate(agentHistoryOpen ? "chat.hideHistory" : "chat.historyList")}
-            style={{
-              display: "flex", alignItems: "center",
-              height: 26, padding: "0 10px",
-              background: agentHistoryOpen ? "var(--bg-selected)" : "none",
-              border: "1px solid var(--border)",
-              borderRadius: 7,
-              color: "var(--text-muted)",
-              cursor: "pointer",
-              fontSize: 12,
-            }}
-          >
-            {translate("chat.historyList")}
-          </button>
+      {/* 编辑器：对话栏自己一行顶栏。助手：入口在中间主顶栏，这里不再叠一行。 */}
+      {!isMobile && isEditorLayout && (
+        <div
+          data-agent-chrome=""
+          style={{
+            display: "flex",
+            alignItems: "center",
+            flexShrink: 0,
+            height: 36,
+            background: "var(--bg-panel)",
+            borderBottom: "1px solid var(--border)",
+          }}
+        >
+          {renderWorkspaceChatActions({ pullRight: true })}
         </div>
       )}
-      {!isMobile && (
-        <div
-          ref={setSessionListHost}
-          style={{
-            height: agentHistoryOpen ? 220 : 0,
-            flexShrink: 0,
-            overflow: "hidden",
-            borderBottom: agentHistoryOpen ? "1px solid var(--border)" : "none",
-            background: "var(--bg-panel)",
-          }}
-        />
-      )}
-      <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
+      <div style={{ flex: 1, display: "flex", flexDirection: "row", overflow: "hidden", minHeight: 0 }}>
+        <div style={{
+          flex: 1,
+          overflow: "hidden",
+          position: "relative",
+          minWidth: 0,
+          minHeight: 0,
+        }}>
         {showChat ? (
           <ChatWindow
             key={sessionKey}
@@ -1880,6 +1945,24 @@ export function AppShell() {
             </div>
           )
         ) : null}
+      </div>
+        {!isMobile && (
+          <div
+            ref={setSessionListHost}
+            data-agent-history-drawer=""
+            style={{
+              // 列表在对话右侧：打开时聊天左移；编辑器下右栏总宽 +240，从中间借空间。
+              width: agentHistoryOpen ? AGENT_HISTORY_DRAWER_WIDTH : 0,
+              height: "100%",
+              flexShrink: 0,
+              overflow: "hidden",
+              minHeight: 0,
+              background: "var(--bg-panel)",
+              borderLeft: agentHistoryOpen ? "1px solid var(--border)" : "none",
+              transition: "width 0.2s ease",
+            }}
+          />
+        )}
       </div>
     </div>
   );
@@ -2126,7 +2209,15 @@ export function AppShell() {
               {renderSessionToolsButton()}
             </>
           )}
-          {!isMobile && renderMainFileToggle(false)}
+          {/* 编辑器：页签与收紧右侧并入本行；审阅按钮在文档底栏。 */}
+          {mergeFileTabsIntoMainTopBar && renderFileTabStrip(true)}
+          {/* 助手：+ / 列表抽屉 / 收起文件栏仍挂中间主顶栏最右。 */}
+          {!isMobile && !isEditorLayout && (
+            <div data-workspace-chrome-end="" style={{ display: "flex", alignItems: "stretch", marginLeft: "auto" }}>
+              {renderWorkspaceChatActions()}
+              {renderMainFileToggle(false)}
+            </div>
+          )}
           <BranchNavigator
             tree={branchTree}
             activeLeafId={branchActiveLeafId}
@@ -2352,7 +2443,11 @@ export function AppShell() {
         id="file-panel"
         className={`right-panel-container${rightPanelOpen ? " right-panel-open" : " right-panel-closed"}${rightPanelResizer.isResizing ? " right-panel-resizing" : ""}`}
         style={{
-          "--right-panel-width": `${rightPanelResizer.width}px`,
+          "--right-panel-width": `${rightPanelResizer.width + (
+            !isMobile && isEditorLayout && rightPanelOpen && agentHistoryOpen
+              ? AGENT_HISTORY_DRAWER_WIDTH
+              : 0
+          )}px`,
           display: "flex",
           flexDirection: "column",
           borderLeft: "1px solid var(--border)",
