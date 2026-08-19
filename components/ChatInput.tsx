@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useState, useCallback, useEffect, useLayoutEffect, useImperativeHandle, forwardRef, KeyboardEvent } from "react";
+import React, { useRef, useState, useCallback, useEffect, useLayoutEffect, useImperativeHandle, useMemo, forwardRef, KeyboardEvent } from "react";
 import type { BuiltinSlashCommandResult, CompactResultInfo, QueuedMessages, SlashCommandInfo } from "@/hooks/useAgentSession";
 import type { SkillsResponse } from "@/lib/api-types";
 import type { TextContent, UserMessage } from "@/lib/types";
@@ -23,9 +23,18 @@ import {
   type AtQueryMatch, type FileIndexEntry,
 } from "@/lib/file-fuzzy";
 import { FolderIcon, getFileIcon } from "./FileIcons";
+import { ComposerHighlight } from "./ComposerHighlight";
+import { ContextUsageRing } from "./ContextUsageRing";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { useI18n } from "@/hooks/useI18n";
+import { useI18n } from "../hooks/useI18n";
 import type { ToolPreset } from "@/lib/tool-presets";
+import {
+  applySlashInsertion,
+  extractSlashQuery,
+  type SlashQueryMatch,
+} from "@/lib/composer-tokens";
+import { getFileName } from "@/lib/file-paths";
+import type { WrittenFile } from "@/lib/turn-written-files";
 
 export interface AttachedImage {
   data: string;   // base64, no prefix
@@ -80,6 +89,9 @@ interface Props {
   draftKey?: string;
   /** Session working directory — enables the @ file autocomplete menu */
   cwd?: string | null;
+  contextUsage?: { percent: number | null; contextWindow: number; tokens: number | null } | null;
+  lastWrittenFiles?: WrittenFile[];
+  onOpenWrittenFile?: (filePath: string) => void;
 }
 
 export interface ChatInputHandle {
@@ -101,6 +113,28 @@ const TOOL_PRESET_MAP: Record<ToolPresetLabel, ToolPreset> = {
   full: "full",
 };
 const COMPOSITION_END_ENTER_GRACE_MS = 100;
+const COMPOSER_HEIGHT_KEY = "pi-composer-min-height";
+const COMPOSER_HEIGHT_MIN = 56;
+const COMPOSER_HEIGHT_DEFAULT = 88;
+
+function readComposerMinHeight(): number {
+  if (typeof window === "undefined") return COMPOSER_HEIGHT_DEFAULT;
+  const raw = window.localStorage.getItem(COMPOSER_HEIGHT_KEY);
+  const parsed = raw ? Number(raw) : NaN;
+  if (!Number.isFinite(parsed)) return COMPOSER_HEIGHT_DEFAULT;
+  return Math.max(COMPOSER_HEIGHT_MIN, Math.min(Math.round(window.innerHeight * 0.45), Math.round(parsed)));
+}
+
+function composerMaxHeight(): number {
+  if (typeof window === "undefined") return 280;
+  return Math.max(COMPOSER_HEIGHT_MIN, Math.round(window.innerHeight * 0.45));
+}
+
+function applyComposerFieldHeight(ta: HTMLTextAreaElement, minHeight: number): void {
+  const maxHeight = Math.max(minHeight, composerMaxHeight());
+  ta.style.height = "auto";
+  ta.style.height = `${Math.max(minHeight, Math.min(ta.scrollHeight, maxHeight))}px`;
+}
 const MODEL_FILTER_THRESHOLD = 8;
 const MODEL_OPTION_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 const ANCHORED_MENU_GAP = 8;
@@ -392,6 +426,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   onPromptWithStreamingBehavior,
   draftKey,
   cwd,
+  contextUsage,
+  lastWrittenFiles,
+  onOpenWrittenFile,
 }: Props, ref) {
   const { t } = useI18n();
   const isMobile = useIsMobile();
@@ -412,6 +449,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const [slashActiveIndex, setSlashActiveIndex] = useState(0);
   const [slashMenuMaxHeight, setSlashMenuMaxHeight] = useState<number | null>(null);
   const [atQuery, setAtQuery] = useState<AtQueryMatch | null>(null);
+  const [slashAt, setSlashAt] = useState<SlashQueryMatch | null>(() => {
+    const initial = draftKey ? getDraft(draftKey)?.value ?? "" : "";
+    return extractSlashQuery(initial);
+  });
   const [atMenuOpen, setAtMenuOpen] = useState(false);
   const [atActiveIndex, setAtActiveIndex] = useState(0);
   const [historyMenuOpen, setHistoryMenuOpen] = useState(false);
@@ -419,6 +460,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const [fileIndex, setFileIndex] = useState<{ cwd: string; entries: FileIndexEntry[]; truncated: boolean } | null>(null);
   const [fileIndexLoading, setFileIndexLoading] = useState(false);
   const [atServerResult, setAtServerResult] = useState<{ cwd: string; query: string; matches: FileIndexEntry[] } | null>(null);
+  const [filesBarOpen, setFilesBarOpen] = useState(false);
+  const [composerMinHeight, setComposerMinHeight] = useState(COMPOSER_HEIGHT_DEFAULT);
   const [skillDormancyState, setSkillDormancyState] = useState<{
     cwd: string;
     values: Record<string, boolean>;
@@ -428,6 +471,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     : {};
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const highlightRef = useRef<HTMLDivElement>(null);
+  const composerMinHeightRef = useRef(composerMinHeight);
+  composerMinHeightRef.current = composerMinHeight;
   const dropdownRef = useRef<HTMLDivElement>(null);
   const modelDropdownPanelRef = useRef<HTMLDivElement>(null);
   const toolDropdownRef = useRef<HTMLDivElement>(null);
@@ -437,6 +483,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isComposingRef = useRef(false);
   const lastCompositionEndAtRef = useRef(0);
+  const slashJustAppliedRef = useRef(0);
   const slashCommandsRequestedRef = useRef(false);
   const slashMenuRef = useRef<HTMLDivElement>(null);
   const slashItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -698,7 +745,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     if (draftKeyRef.current && draftKeyRef.current !== draftKey) clearDraft(draftKeyRef.current);
     clearImages();
     if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
+      applyComposerFieldHeight(textareaRef.current, composerMinHeightRef.current);
     }
   }, [clearImages, draftKey]);
 
@@ -737,11 +784,49 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   }, [draftKey]);
 
   useEffect(() => {
+    setComposerMinHeight(readComposerMinHeight());
+  }, []);
+
+  useEffect(() => {
     const ta = textareaRef.current;
     if (!ta) return;
-    ta.style.height = "auto";
-    if (value) ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
-  }, [value]);
+    applyComposerFieldHeight(ta, composerMinHeight);
+  }, [value, composerMinHeight]);
+
+  const touchedFiles = lastWrittenFiles ?? [];
+
+  const syncHighlightScroll = useCallback(() => {
+    const ta = textareaRef.current;
+    const highlight = highlightRef.current;
+    if (!ta || !highlight) return;
+    highlight.scrollTop = ta.scrollTop;
+    highlight.scrollLeft = ta.scrollLeft;
+  }, []);
+
+  const startComposerResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (isMobile) return;
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = composerMinHeightRef.current;
+    const onMove = (moveEvent: PointerEvent) => {
+      const next = Math.max(
+        COMPOSER_HEIGHT_MIN,
+        Math.min(composerMaxHeight(), startHeight + (moveEvent.clientY - startY)),
+      );
+      setComposerMinHeight(next);
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      try {
+        window.localStorage.setItem(COMPOSER_HEIGHT_KEY, String(composerMinHeightRef.current));
+      } catch {
+        // 隐私模式写不进 localStorage 时静默，高度仍留在本次会话。
+      }
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }, [isMobile]);
 
   useEffect(() => {
     return () => {
@@ -765,9 +850,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     onSend(msg, attachedImages.length ? attachedImages : undefined);
   }, [value, attachedImages, isStreaming, onBuiltinCommand, onSend, clearInput, onAudioUnlock]);
 
-  const slashQuery = value.startsWith("/") && !/\s/.test(value.slice(1))
-    ? value.slice(1).toLowerCase()
-    : null;
+  const slashQuery = slashAt ? slashAt.query.toLowerCase() : null;
 
   const filteredSlashCommands = (() => {
     if (slashQuery === null) return [];
@@ -801,12 +884,15 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   // Recomputed from the text before the caret on every change/caret move.
   // Disabled entirely when there is no cwd (new session without a directory).
   const updateAtQuery = useCallback((text: string, cursor: number | null) => {
+    const pos = cursor ?? text.length;
+    const before = text.slice(0, pos);
+    // `/` 与 cwd 无关，任意位置都要刷新，才能在句子中间唤出技能列表。
+    setSlashAt(extractSlashQuery(before));
     if (!cwd) {
       setAtQuery(null);
       return;
     }
-    const pos = cursor ?? text.length;
-    setAtQuery(extractAtQuery(text.slice(0, pos)));
+    setAtQuery(extractAtQuery(before));
   }, [cwd]);
 
   const atQueryText = atQuery?.query ?? null;
@@ -965,19 +1051,26 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   }, []);
 
   const applySlashCommand = useCallback((command: SlashCommandPaletteItem) => {
-    const nextValue = `/${command.name} `;
-    setValue(nextValue);
+    const ta = textareaRef.current;
+    const caret = ta?.selectionStart ?? value.length;
+    const token = slashAt ?? extractSlashQuery(value.slice(0, caret));
+    const slashStart = token?.start ?? caret;
+    const inserted = applySlashInsertion(value, caret, slashStart, command.name);
+    valueRef.current = inserted.value;
+    setValue(inserted.value);
+    setSlashAt(null);
     setSlashMenuOpen(false);
     setSlashActiveIndex(0);
+    slashJustAppliedRef.current = Date.now();
     requestAnimationFrame(() => {
-      const ta = textareaRef.current;
-      if (!ta) return;
-      ta.focus();
-      ta.setSelectionRange(nextValue.length, nextValue.length);
-      ta.style.height = "auto";
-      ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(inserted.cursor, inserted.cursor);
+      applyComposerFieldHeight(el, composerMinHeightRef.current);
+      updateAtQuery(inserted.value, inserted.cursor);
     });
-  }, []);
+  }, [slashAt, updateAtQuery, value]);
 
   const sendQueued = useCallback((mode: "steer" | "followup") => {
     const msg = value.trim();
@@ -1049,6 +1142,11 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         isComposingRef.current ||
         nativeEvent.isComposing ||
         nativeEvent.keyCode === 229;
+
+      if (sendShortcut && Date.now() - slashJustAppliedRef.current < 250) {
+        e.preventDefault();
+        return;
+      }
 
       if (sendShortcut && (isComposing || recentlyComposed)) {
         if (recentlyComposed) e.preventDefault();
@@ -1168,9 +1266,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const handleInput = useCallback(() => {
     const ta = textareaRef.current;
     if (!ta) return;
-    ta.style.height = "auto";
-    ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
-  }, []);
+    applyComposerFieldHeight(ta, composerMinHeightRef.current);
+    syncHighlightScroll();
+  }, [syncHighlightScroll]);
 
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     const items = Array.from(e.clipboardData?.items ?? []);
@@ -1528,6 +1626,105 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
           </div>
         )}
 
+        {touchedFiles.length > 0 && (
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8,
+            marginBottom: 8,
+            padding: "0 2px",
+            fontSize: 12,
+            color: "var(--text-muted)",
+          }}>
+            <button
+              type="button"
+              onClick={() => setFilesBarOpen((open) => !open)}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                border: "none",
+                background: "none",
+                color: "inherit",
+                cursor: "pointer",
+                padding: 0,
+                fontSize: 12,
+              }}
+            >
+              <span style={{
+                display: "inline-block",
+                transform: filesBarOpen ? "rotate(90deg)" : "none",
+                transition: "transform 0.12s",
+              }}>▸</span>
+              {t("chat.filesTouched", { count: touchedFiles.length })}
+            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <button
+                type="button"
+                disabled
+                title={t("chat.undoUnavailable")}
+                style={{
+                  border: "none",
+                  background: "none",
+                  color: "var(--text-dim)",
+                  cursor: "not-allowed",
+                  fontSize: 12,
+                }}
+              >
+                {t("chat.undoAll")}
+              </button>
+              <button
+                type="button"
+                disabled
+                title={t("chat.reviewUnavailable")}
+                style={{
+                  padding: "4px 10px",
+                  border: "1px solid var(--border)",
+                  borderRadius: 8,
+                  background: "var(--bg-panel)",
+                  color: "var(--text-dim)",
+                  cursor: "not-allowed",
+                  fontSize: 12,
+                }}
+              >
+                {t("chat.reviewChanges")}
+              </button>
+            </div>
+          </div>
+        )}
+        {filesBarOpen && touchedFiles.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+            {touchedFiles.map((file) => {
+              const name = getFileName(file.filePath);
+              return (
+                <button
+                  key={file.filePath}
+                  type="button"
+                  title={file.filePath}
+                  onClick={() => onOpenWrittenFile?.(file.filePath)}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    padding: "2px 8px",
+                    fontSize: 12,
+                    fontFamily: "var(--font-mono)",
+                    color: "var(--text)",
+                    background: "var(--bg-subtle)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 6,
+                    cursor: onOpenWrittenFile ? "pointer" : "default",
+                  }}
+                >
+                  {getFileIcon(name, 12)}
+                  <span>{name}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {/* Main input */}
         <div style={{ position: "relative", minWidth: 0 }}>
           {historyMenuOpen && inputHistory.length > 0 && (
@@ -1869,146 +2066,223 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             style={{
               minWidth: 0,
               display: "flex",
-              gap: 8,
-              alignItems: "center",
+              flexDirection: "column",
               background: "var(--bg)",
               border: `1px solid ${bashMode ? "var(--tool-bg)" : isStreaming && (onSteer || onFollowUp)
                 ? "rgba(234,179,8,0.4)"
                 : "color-mix(in srgb, var(--border) 70%, transparent)"}`,
               borderRadius: 14,
-              padding: "10px 10px 10px 14px",
+              padding: "10px 12px 6px",
               boxShadow: "0 1px 2px rgba(15,23,42,0.04), 0 8px 24px -12px rgba(15,23,42,0.10)",
               transition: "border-color 0.15s, background 0.15s, box-shadow 0.15s",
             } as React.CSSProperties}
           >
-          <textarea
-            ref={textareaRef}
-            value={value}
-            onChange={(e) => {
-              valueRef.current = e.target.value;
-              setValue(e.target.value);
-              setHistoryMenuOpen(false);
-              updateAtQuery(e.target.value, e.target.selectionStart);
-            }}
-            onSelect={(e) => {
-              const el = e.currentTarget;
-              updateAtQuery(el.value, el.selectionStart);
-            }}
-            onKeyDown={handleKeyDown}
-            onCompositionStart={() => {
-              isComposingRef.current = true;
-            }}
-            onCompositionEnd={(e) => {
-              isComposingRef.current = false;
-              lastCompositionEndAtRef.current = Date.now();
-              const el = e.currentTarget;
-              updateAtQuery(el.value, el.selectionStart);
-            }}
-            onInput={handleInput}
-            onPaste={handlePaste}
-            placeholder={
-              isStreaming && (onSteer || onFollowUp)
-                ? t("chat.steerPlaceholder")
-                : isStreaming ? t("chat.agentPlaceholder")
-                : t("chat.messagePlaceholder")
-            }
-            rows={1}
-            style={{
-              flex: 1,
-              minWidth: 0,
-              width: "100%",
-              background: "none",
-              border: "none",
-              outline: "none",
-              resize: "none",
-              color: "var(--text)",
-              fontSize: 14,
-              lineHeight: 1.6,
-              fontFamily: "inherit",
-              minHeight: 24,
-              maxHeight: 200,
-              overflow: "auto",
-            }}
-          />
-
-          {isStreaming ? (
-            <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, alignSelf: "flex-end" }}>
-              {onSteer && (
+            <div style={{ position: "relative", minWidth: 0 }}>
+              {value ? <ComposerHighlight ref={highlightRef} value={value} /> : null}
+              <textarea
+                ref={textareaRef}
+                className="composer-textarea"
+                value={value}
+                onChange={(e) => {
+                  valueRef.current = e.target.value;
+                  setValue(e.target.value);
+                  setHistoryMenuOpen(false);
+                  updateAtQuery(e.target.value, e.target.selectionStart);
+                }}
+                onSelect={(e) => {
+                  const el = e.currentTarget;
+                  updateAtQuery(el.value, el.selectionStart);
+                }}
+                onKeyDown={handleKeyDown}
+                onCompositionStart={() => {
+                  isComposingRef.current = true;
+                }}
+                onCompositionEnd={(e) => {
+                  isComposingRef.current = false;
+                  lastCompositionEndAtRef.current = Date.now();
+                  const el = e.currentTarget;
+                  updateAtQuery(el.value, el.selectionStart);
+                }}
+                onInput={handleInput}
+                onPaste={handlePaste}
+                onScroll={syncHighlightScroll}
+                placeholder={
+                  isStreaming && (onSteer || onFollowUp)
+                    ? t("chat.steerPlaceholder")
+                    : isStreaming ? t("chat.agentPlaceholder")
+                    : t("chat.messagePlaceholder")
+                }
+                rows={1}
+                style={{
+                  position: "relative",
+                  zIndex: 1,
+                  display: "block",
+                  minWidth: 0,
+                  width: "100%",
+                  background: "none",
+                  border: "none",
+                  outline: "none",
+                  resize: "none",
+                  color: value ? "transparent" : "var(--text)",
+                  caretColor: "var(--text)",
+                  fontSize: 14,
+                  lineHeight: 1.6,
+                  fontFamily: "inherit",
+                  padding: 0,
+                  minHeight: composerMinHeight,
+                  overflow: "auto",
+                }}
+              />
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 4 }}>
+              <div style={{ flex: 1, minWidth: 0 }} />
+              {contextUsage?.contextWindow ? (
+                <ContextUsageRing
+                  percent={contextUsage.percent}
+                  tokens={contextUsage.tokens}
+                  contextWindow={contextUsage.contextWindow}
+                  heading={t("chat.contextUsageTitle")}
+                  unknownLabel={t("chat.contextUsageUnknown")}
+                  usedLabel={t("chat.contextUsedOf", {
+                    used: contextUsage.tokens === null ? "—" : contextUsage.tokens.toLocaleString(),
+                    window: contextUsage.contextWindow.toLocaleString(),
+                  })}
+                />
+              ) : null}
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                title={t("chat.attachImage")}
+                aria-label={t("chat.attachImage")}
+                style={{
+                  width: 28,
+                  height: 28,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  border: "none",
+                  borderRadius: 999,
+                  background: "none",
+                  color: attachedImages.length ? "var(--accent)" : "var(--text-muted)",
+                  cursor: "pointer",
+                }}
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21.44 11.05 12 20.5a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66L9.17 17.07a2 2 0 1 1-2.83-2.83l8.49-8.48" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                disabled
+                title={t("chat.voiceUnavailable")}
+                aria-label={t("chat.voiceUnavailable")}
+                style={{
+                  width: 28,
+                  height: 28,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  border: "1px solid var(--border)",
+                  borderRadius: 999,
+                  background: "var(--bg-panel)",
+                  color: "var(--text-dim)",
+                  cursor: "not-allowed",
+                }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                  <line x1="12" y1="19" x2="12" y2="22" />
+                </svg>
+              </button>
+              {isStreaming ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  {onSteer && (
+                    <button
+                      onClick={() => sendQueued("steer")}
+                      disabled={!canQueueStreamingMessage}
+                      title="Interrupt the current run and inject this message now"
+                      aria-label={t("chat.steer")}
+                      style={{
+                        width: 28,
+                        height: 28,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        background: canQueueStreamingMessage ? "color-mix(in srgb, var(--accent) 12%, transparent)" : "none",
+                        border: "1px solid var(--border)",
+                        borderRadius: 999,
+                        color: canQueueStreamingMessage ? "var(--accent)" : "var(--text-dim)",
+                        cursor: canQueueStreamingMessage ? "pointer" : "not-allowed",
+                      }}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M5 1 L9 5 L5 9" /><line x1="1" y1="5" x2="9" y2="5" />
+                      </svg>
+                    </button>
+                  )}
+                  {onFollowUp && (
+                    <button
+                      onClick={() => sendQueued("followup")}
+                      disabled={!canQueueStreamingMessage}
+                      title="Queue this message after the agent finishes"
+                      aria-label={t("chat.followUp")}
+                      style={{
+                        width: 28,
+                        height: 28,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        border: "1px solid var(--border)",
+                        borderRadius: 999,
+                        background: "none",
+                        color: canQueueStreamingMessage ? "var(--text)" : "var(--text-dim)",
+                        cursor: canQueueStreamingMessage ? "pointer" : "not-allowed",
+                      }}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="5" y1="1" x2="5" y2="6" /><polyline points="2.5 3.5 5 1 7.5 3.5" />
+                        <line x1="2" y1="9" x2="8" y2="9" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+              ) : (
                 <button
-                  onClick={() => sendQueued("steer")}
-                  disabled={!canQueueStreamingMessage}
-                  title="Interrupt the current run and inject this message now"
+                  onClick={handleSend}
+                  disabled={!value.trim() && !attachedImages.length}
+                  title={t("chat.send")}
+                  aria-label={t("chat.send")}
                   style={{
-                    display: "flex", alignItems: "center", gap: 5,
-                    padding: "7px 12px",
-                    background: canQueueStreamingMessage ? "rgba(234,179,8,0.12)" : "none",
-                    border: "1px solid rgba(234,179,8,0.35)",
-                    borderRadius: 8,
-                    color: canQueueStreamingMessage ? "rgba(180,130,0,1)" : "var(--text-dim)",
-                    cursor: canQueueStreamingMessage ? "pointer" : "not-allowed",
-                    fontSize: 13, fontWeight: 600, letterSpacing: "-0.01em",
-                    transition: "background 0.12s",
+                    width: 28,
+                    height: 28,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    background: (value.trim() || attachedImages.length) ? "var(--accent)" : "var(--bg-panel)",
+                    border: "none",
+                    borderRadius: 999,
+                    color: (value.trim() || attachedImages.length) ? "#fff" : "var(--text-dim)",
+                    cursor: (value.trim() || attachedImages.length) ? "pointer" : "not-allowed",
                   }}
                 >
-                  <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M5 1 L9 5 L5 9" /><line x1="1" y1="5" x2="9" y2="5" />
+                  <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="2" y1="7" x2="11" y2="7" />
+                    <polyline points="7.5 3 12 7 7.5 11" />
                   </svg>
-                  {t("chat.steer")}
-                </button>
-              )}
-              {onFollowUp && (
-                <button
-                  onClick={() => sendQueued("followup")}
-                  disabled={!canQueueStreamingMessage}
-                  title="Queue this message after the agent finishes"
-                  style={{
-                    display: "flex", alignItems: "center", gap: 5,
-                    padding: "7px 12px",
-                    background: canQueueStreamingMessage ? "rgba(129,140,248,0.12)" : "none",
-                    border: "1px solid rgba(129,140,248,0.35)",
-                    borderRadius: 8,
-                    color: canQueueStreamingMessage ? "rgba(99,102,241,1)" : "var(--text-dim)",
-                    cursor: canQueueStreamingMessage ? "pointer" : "not-allowed",
-                    fontSize: 13, fontWeight: 600, letterSpacing: "-0.01em",
-                    transition: "background 0.12s",
-                  }}
-                >
-                  <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="5" y1="1" x2="5" y2="6" /><polyline points="2.5 3.5 5 1 7.5 3.5" />
-                    <line x1="2" y1="9" x2="8" y2="9" />
-                  </svg>
-                  {t("chat.followUp")}
                 </button>
               )}
             </div>
-          ) : (
-            <button
-              onClick={handleSend}
-              disabled={!value.trim() && !attachedImages.length}
-              style={{
-                flexShrink: 0,
-                alignSelf: "flex-end",
-                display: "flex", alignItems: "center", gap: 6,
-                padding: "7px 14px",
-                background: (value.trim() || attachedImages.length) ? "var(--accent)" : "var(--bg-panel)",
-                border: "none",
-                borderRadius: 8,
-                color: (value.trim() || attachedImages.length) ? "#fff" : "var(--text-dim)",
-                cursor: (value.trim() || attachedImages.length) ? "pointer" : "not-allowed",
-                fontSize: 13,
-                fontWeight: 600,
-                letterSpacing: "-0.01em",
-                boxShadow: (value.trim() || attachedImages.length) ? "0 1px 3px rgba(37,99,235,0.25)" : "none",
-                transition: "background 0.15s, box-shadow 0.15s",
-              }}
-            >
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="2" y1="7" x2="11" y2="7" />
-                <polyline points="7.5 3 12 7 7.5 11" />
-              </svg>
-              {t("chat.send")}
-            </button>
-          )}
+            {!isMobile && (
+              <div
+                className="composer-resize-handle"
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label={t("chat.composerResize")}
+                title={t("chat.composerResize")}
+                onPointerDown={startComposerResize}
+              />
+            )}
           </div>
         </div>
 
@@ -2028,36 +2302,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
           gap: 6,
         }}>
 
-          {/* LEFT: attach + model selector (idle) or steer/followup toggle (streaming) */}
+          {/* LEFT: model selector（附件已收入输入框内角落，避免重复） */}
           <div style={{ flex: isMobile ? "1 1 auto" : "0 0 auto", minWidth: 0, display: "flex", alignItems: "center", gap: 2 }}>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-             title={t("chat.attachImage")}
-              style={{
-                flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
-                width: 32, height: 32, padding: 0,
-                background: "none", border: "none",
-                borderRadius: 9,
-                color: attachedImages.length ? "var(--accent)" : "var(--text-muted)",
-                cursor: "pointer",
-                opacity: 1,
-                transition: "background 0.12s, color 0.12s",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = "var(--bg-hover)";
-                e.currentTarget.style.color = attachedImages.length ? "var(--accent)" : "var(--text)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = "none";
-                e.currentTarget.style.color = attachedImages.length ? "var(--accent)" : "var(--text-muted)";
-              }}
-            >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                <circle cx="8.5" cy="8.5" r="1.5" />
-                <polyline points="21 15 16 10 5 21" />
-              </svg>
-            </button>
             {/* Model selector — visible always, disabled while the session or switch is busy */}
             {(modelOptions.length > 0 || currentName || modelError) && onModelChange && (
                 <div ref={dropdownRef} style={{ position: "relative", flex: isMobile ? "1 1 auto" : undefined, minWidth: 0 }}>

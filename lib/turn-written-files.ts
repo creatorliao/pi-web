@@ -1,4 +1,4 @@
-import type { AssistantContentBlock, ToolResultMessage } from "./types";
+import type { AgentMessage, AssistantContentBlock, AssistantMessage, ToolResultMessage } from "./types";
 import { resolveLocalFilePath } from "./file-links";
 import { isEditToolName, isWriteToolName } from "./tool-names";
 
@@ -57,4 +57,31 @@ export function extractTurnWrittenFiles(
   }
 
   return writtenFiles;
+}
+
+/**
+ * 最近一轮（最后一条用户消息之后）实际写出的文件，供输入框上方「N Files」条使用。
+ */
+export function extractLastTurnWrittenFiles(
+  messages: AgentMessage[],
+  toolResults: Map<string, ToolResultMessage> | undefined,
+  cwd?: string,
+): WrittenFile[] {
+  let lastUser = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === "user") {
+      lastUser = i;
+      break;
+    }
+  }
+  if (lastUser < 0) return [];
+
+  const turnContent: AssistantContentBlock[] = [];
+  for (let i = lastUser + 1; i < messages.length; i++) {
+    const message = messages[i];
+    if (message?.role === "assistant") {
+      for (const block of (message as AssistantMessage).content ?? []) turnContent.push(block);
+    }
+  }
+  return extractTurnWrittenFiles(turnContent, toolResults, cwd);
 }
