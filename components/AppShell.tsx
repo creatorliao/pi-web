@@ -10,10 +10,10 @@ import { FileViewer } from "./FileViewer";
 import { TabBar, type Tab } from "./TabBar";
 import { openFileTab, saveFileViewerState } from "./file-tab-state";
 import { SettingsDialog } from "./SettingsDialog";
-import { AppStatusBar } from "./AppStatusBar";
+import { AppStatusBar, type StatusWorktree } from "./AppStatusBar";
 import type { ToolPreset } from "@/lib/tool-presets";
 import { ProjectTrustDialog } from "./ProjectTrustDialog";
-import { BranchNavigator, sessionHasBranches } from "./BranchNavigator";
+import { BranchNavigator, selectTopLevelBranches, sessionHasBranches } from "./BranchNavigator";
 import { useI18n } from "@/hooks/useI18n";
 import { useToast } from "@/hooks/useToast";
 import { useLayoutMode } from "@/hooks/useLayoutMode";
@@ -66,6 +66,23 @@ import { shouldAttemptAutoSessionTitle } from "@/lib/session-auto-title";
 
 type SessionCopyField = "file" | "id";
 type AutoNameStatus = { kind: "idle" } | { kind: "naming" };
+
+type StatusGitInfo = {
+  isGit: boolean;
+  projectRoot: string;
+  projectKey: string;
+  branch: string | null;
+  dirty: boolean;
+  worktrees: StatusWorktree[];
+  currentPath: string | null;
+};
+
+/** 对话树某一顶层分叉是否包含当前叶子。 */
+function treeContainsLeaf(node: SessionTreeNode, leafId: string | null): boolean {
+  if (!leafId) return false;
+  if (node.entry.id === leafId || node.compressedEntryIds?.includes(leafId)) return true;
+  return node.children.some((child) => treeContainsLeaf(child, leafId));
+}
 
 const TOP_BAR_ICON_BUTTON_SIZE = 36;
 /** 侧栏窄于此时「设置」只显示齿轮，避免挤掉标签。 */
@@ -335,6 +352,7 @@ export function AppShell() {
   }, [rightPanelResizer.isResizing]);
   const chatInputRef = useRef<ChatInputHandle | null>(null);
   const topBarRef = useRef<HTMLDivElement>(null);
+  const statusBarRef = useRef<HTMLElement>(null);
   const mobileToolbarRef = useRef<HTMLDivElement>(null);
   const sessionMenuRef = useRef<HTMLDivElement>(null);
   const sessionMenuPanelRef = useRef<HTMLDivElement>(null);
@@ -478,7 +496,8 @@ export function AppShell() {
 
   // Single active panel — only one dropdown open at a time
   const [activeTopPanel, setActiveTopPanel] = useState<"branches" | "session" | null>(null);
-  const [topPanelPos, setTopPanelPos] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [topPanelPos, setTopPanelPos] = useState<{ top?: number; bottom?: number; left: number; width: number } | null>(null);
+  const [statusGit, setStatusGit] = useState<StatusGitInfo | null>(null);
 
   const toggleTopPanel = useCallback((
     panel: "branches" | "session",
@@ -569,14 +588,27 @@ export function AppShell() {
   }, [sessionToolsMenuOpen]);
 
   useEffect(() => {
-    if (!activeTopPanel || !topBarRef.current) return;
+    if (!activeTopPanel) return;
+    // 会话统计从底栏打开，贴着状态栏向上；其余仍挂顶栏。
+    const anchor = activeTopPanel === "session"
+      ? (statusBarRef.current ?? topBarRef.current)
+      : topBarRef.current;
+    if (!anchor) return;
     const update = () => {
-      const topBarRect = topBarRef.current!.getBoundingClientRect();
-      setTopPanelPos({ top: topBarRect.bottom, left: topBarRect.left, width: topBarRect.width });
+      const rect = anchor.getBoundingClientRect();
+      if (activeTopPanel === "session") {
+        setTopPanelPos({
+          bottom: Math.max(8, window.innerHeight - rect.top + 4),
+          left: rect.left,
+          width: rect.width,
+        });
+        return;
+      }
+      setTopPanelPos({ top: rect.bottom, left: rect.left, width: rect.width });
     };
     update();
     const ro = new ResizeObserver(update);
-    ro.observe(topBarRef.current);
+    ro.observe(anchor);
     return () => ro.disconnect();
   }, [activeTopPanel, isMobile]);
 
@@ -843,6 +875,54 @@ export function AppShell() {
     }
     router.replace("/", { scroll: false });
   }, [activeCwd, invalidateWorkspaceRestore, newSessionCwd, router, selectedSession, restoreWorkspaceContext]);
+
+  const statusCwd = selectedSession?.cwd ?? newSessionCwd ?? activeCwd;
+
+  // 底栏 Git / 项目：复用 worktrees + git status，不另开轮询间隔。
+  useEffect(() => {
+    if (!statusCwd) {
+      setStatusGit(null);
+      return;
+    }
+    let cancelled = false;
+    const cwd = statusCwd;
+    Promise.all([
+      fetch(`/api/worktrees?cwd=${encodeURIComponent(cwd)}`).then((res) => res.json()),
+      fetch(`/api/git/status?cwd=${encodeURIComponent(cwd)}`).then((res) => res.json()).catch(() => null),
+    ]).then(([worktreePayload, gitPayload]: [{
+      projectRoot?: string;
+      projectKey?: string;
+      isGit?: boolean;
+      currentWorktreePath?: string | null;
+      worktrees?: StatusWorktree[];
+      error?: string;
+    }, { isGitRepository?: boolean; files?: unknown[] } | null]) => {
+      if (cancelled) return;
+      if (worktreePayload.error || !worktreePayload.projectRoot || worktreePayload.isGit === false) {
+        setStatusGit(null);
+        return;
+      }
+      const current = worktreePayload.worktrees?.find((item) => item.path === worktreePayload.currentWorktreePath)
+        ?? worktreePayload.worktrees?.find((item) => item.isMain);
+      setStatusGit({
+        isGit: true,
+        projectRoot: worktreePayload.projectRoot,
+        projectKey: worktreePayload.projectKey ?? worktreePayload.projectRoot,
+        branch: current?.branch ?? null,
+        dirty: Boolean(gitPayload?.isGitRepository && (gitPayload.files?.length ?? 0) > 0),
+        worktrees: worktreePayload.worktrees ?? [],
+        currentPath: worktreePayload.currentWorktreePath ?? current?.path ?? null,
+      });
+    }).catch(() => {
+      if (!cancelled) setStatusGit(null);
+    });
+    return () => { cancelled = true; };
+  }, [statusCwd, explorerRefreshKey]);
+
+  const handleSelectWorktree = useCallback((path: string) => {
+    if (!statusGit) return;
+    handleCwdChange(path, statusGit.projectRoot, statusGit.projectKey);
+  }, [handleCwdChange, statusGit]);
 
   const handleSelectSession = useCallback((session: SessionInfo, isRestore = false) => {
     invalidateWorkspaceRestore();
@@ -1603,44 +1683,6 @@ export function AppShell() {
             </button>
           );
         })()}
-        {mobile ? (
-          <button
-            type="button"
-            onClick={() => handleBranchesAction(true)}
-            title={translate("i18n.branches")}
-            aria-label={translate("i18n.branches")}
-            aria-pressed={activeTopPanel === "branches"}
-            style={{
-              display: "flex", alignItems: "center", justifyContent: "center",
-              width: TOP_BAR_ICON_BUTTON_SIZE, height: "100%", padding: 0,
-              background: activeTopPanel === "branches" ? "var(--bg-selected)" : "none",
-              border: "none",
-              borderTop: activeTopPanel === "branches" ? "2px solid var(--accent)" : "2px solid transparent",
-              borderRight: "1px solid var(--border)",
-              color: activeTopPanel === "branches" ? "var(--text)" : "var(--text-muted)",
-              cursor: "pointer", flexShrink: 0,
-            }}
-            data-mobile-toolbar-action="branches"
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: branchTree.length > 0 ? "var(--accent)" : "var(--text-dim)" }} aria-hidden="true">
-              <line x1="6" y1="3" x2="6" y2="15" />
-              <circle cx="18" cy="6" r="3" />
-              <circle cx="6" cy="18" r="3" />
-              <path d="M18 9a9 9 0 0 1-9 9" />
-            </svg>
-          </button>
-        ) : (
-          <BranchNavigator
-            tree={branchTree}
-            activeLeafId={branchActiveLeafId}
-            onLeafChange={handleBranchLeafChange}
-            inline
-            containerRef={topBarRef}
-            open={activeTopPanel === "branches"}
-            onToggle={() => handleBranchesAction()}
-            hasSession
-          />
-        )}
         <button
           type="button"
           onClick={() => { void handleOpenSystemPrompt(); }}
@@ -1706,11 +1748,6 @@ export function AppShell() {
         label: translate("title.generate"),
         disabled: nameDisabled,
         onSelect: () => { void handleAutoName(); },
-      },
-      {
-        key: "branches",
-        label: translate("i18n.branches"),
-        onSelect: () => handleBranchesAction(),
       },
       {
         key: "system",
@@ -1791,169 +1828,6 @@ export function AppShell() {
           document.body,
         )}
       </div>
-    );
-  };
-
-  const renderSessionStatsButton = (mobile: boolean) => {
-    if (!mobile && (!showChat || (!sessionStats && !contextUsage))) return null;
-
-    const tokens = sessionStats?.tokens;
-    const cost = sessionStats?.cost ?? 0;
-    const formatCompact = (value: number) => value >= 1_000_000
-      ? `${(value / 1_000_000).toFixed(1)}M`
-      : value >= 1000
-        ? `${(value / 1000).toFixed(0)}k`
-        : String(value);
-    const costText = cost > 0 ? (cost >= 0.01 ? `$${cost.toFixed(2)}` : `<$0.01`) : null;
-
-    let contextColor = "var(--text-muted)";
-    let desktopContextText: string | null = null;
-    let mobileContextText: string | null = null;
-    if (contextUsage?.contextWindow) {
-      const percent = contextUsage.percent;
-      if (percent !== null && percent > 90) contextColor = "#ef4444";
-      else if (percent !== null && percent > 70) contextColor = "rgba(234,179,8,0.95)";
-      desktopContextText = percent !== null
-        ? `${percent.toFixed(0)}% / ${formatCompact(contextUsage.contextWindow)}`
-        : `? / ${formatCompact(contextUsage.contextWindow)}`;
-      mobileContextText = percent !== null ? `${percent.toFixed(0)}%` : null;
-    }
-
-    const tooltipParts: string[] = [];
-    if (tokens) {
-      tooltipParts.push(`in: ${tokens.input.toLocaleString(locale)}`);
-      tooltipParts.push(`out: ${tokens.output.toLocaleString(locale)}`);
-      tooltipParts.push(`cache read: ${tokens.cacheRead.toLocaleString(locale)}`);
-      tooltipParts.push(`cache write: ${tokens.cacheWrite.toLocaleString(locale)}`);
-      if (cost > 0) tooltipParts.push(`cost: $${cost.toFixed(4)}`);
-    }
-    if (contextUsage?.contextWindow) {
-      const percent = contextUsage.percent;
-      tooltipParts.push(`context: ${percent !== null ? percent.toFixed(1) + "%" : "unknown"} of ${contextUsage.contextWindow.toLocaleString()} tokens`);
-    }
-    const tooltip = tooltipParts.join("  |  ");
-    const covered = mobile && mobileToolbarMoreOpen;
-    const hasMobileValues = Boolean(
-      (tokens && (tokens.input > 0 || tokens.output > 0))
-      || costText
-      || mobileContextText,
-    );
-
-    return (
-      <button
-        type="button"
-        onClick={() => toggleTopPanel("session")}
-        disabled={!showChat || covered}
-        tabIndex={covered ? -1 : undefined}
-        title={tooltip || translate("session.title")}
-        aria-label={translate("session.title")}
-        aria-pressed={activeTopPanel === "session"}
-        aria-hidden={covered ? true : undefined}
-        className={mobile ? "mobile-session-stats" : undefined}
-        data-mobile-toolbar-stats={mobile ? "true" : undefined}
-        style={{
-          marginLeft: mobile ? 0 : "auto",
-          display: "flex", alignItems: "center", justifyContent: "flex-end",
-          flex: mobile ? 1 : undefined,
-          minWidth: 0,
-          gap: mobile ? 7 : 10,
-          paddingLeft: mobile ? 6 : 12,
-          paddingRight: mobile ? 6 : 12,
-          height: "100%",
-          overflow: "hidden",
-          visibility: covered ? "hidden" : "visible",
-          pointerEvents: covered ? "none" : "auto",
-          background: activeTopPanel === "session" ? "var(--bg-selected)" : "none",
-          border: "none",
-          borderTop: activeTopPanel === "session" ? "2px solid var(--accent)" : "2px solid transparent",
-          fontSize: 11, color: "var(--text-muted)",
-          whiteSpace: "nowrap", cursor: showChat ? "pointer" : "default",
-          fontVariantNumeric: "tabular-nums",
-          transition: "color 0.1s, background 0.1s",
-        }}
-        onMouseEnter={(event) => {
-          if (showChat && !covered) event.currentTarget.style.color = "var(--text)";
-        }}
-        onMouseLeave={(event) => {
-          event.currentTarget.style.color = activeTopPanel === "session" ? "var(--text)" : "var(--text-muted)";
-        }}
-      >
-        {mobile ? (
-          <>
-            {tokens && tokens.input > 0 && (
-              <span className="mobile-session-stat-io" style={{ display: "flex", alignItems: "center", gap: 2, flexShrink: 0 }}>
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <line x1="5" y1="8.5" x2="5" y2="1.5" /><polyline points="2 4 5 1.5 8 4" />
-                </svg>
-                {formatCompact(tokens.input)}
-              </span>
-            )}
-            {tokens && tokens.output > 0 && (
-              <span className="mobile-session-stat-io" style={{ display: "flex", alignItems: "center", gap: 2, flexShrink: 0 }}>
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <line x1="5" y1="1.5" x2="5" y2="8.5" /><polyline points="2 6 5 8.5 8 6" />
-                </svg>
-                {formatCompact(tokens.output)}
-              </span>
-            )}
-            {costText && (
-              <span className="mobile-session-stat-cost" style={{ color: "var(--text)", fontWeight: 500, flexShrink: 0 }}>
-                {costText}
-              </span>
-            )}
-            {mobileContextText && (
-              <span style={{ color: contextColor, flexShrink: 0 }}>
-                {mobileContextText}
-              </span>
-            )}
-            {!hasMobileValues && showChat && (
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", color: "var(--text-dim)" }}>
-                {translate("session.title")}
-              </span>
-            )}
-          </>
-        ) : (
-          <>
-            {tokens && tokens.input > 0 && (
-              <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <line x1="5" y1="8.5" x2="5" y2="1.5" /><polyline points="2 4 5 1.5 8 4" />
-                </svg>
-                {formatCompact(tokens.input)}
-              </span>
-            )}
-            {tokens && tokens.output > 0 && (
-              <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <line x1="5" y1="1.5" x2="5" y2="8.5" /><polyline points="2 6 5 8.5 8 6" />
-                </svg>
-                {formatCompact(tokens.output)}
-              </span>
-            )}
-            {tokens && tokens.cacheRead > 0 && (
-              <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M8.5 5a3.5 3.5 0 1 1-1-2.45" /><polyline points="6.5 1.5 8.5 2.5 7.5 4.5" />
-                </svg>
-                {formatCompact(tokens.cacheRead)}
-              </span>
-            )}
-            {costText && (
-              <span style={{ display: "flex", alignItems: "center", color: "var(--text)", fontWeight: 500 }}>
-                {costText}
-              </span>
-            )}
-            {desktopContextText && (
-              <span style={{ display: "flex", alignItems: "center", gap: 4, color: contextColor }}>
-                <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M1 9 L1 5 Q1 1 5 1 Q9 1 9 5 L9 9" /><line x1="1" y1="9" x2="9" y2="9" />
-                </svg>
-                {desktopContextText}
-              </span>
-            )}
-          </>
-        )}
-      </button>
     );
   };
 
@@ -2590,7 +2464,6 @@ export function AppShell() {
                   </svg>
                 )}
               </button>
-              {renderSessionStatsButton(true)}
               {renderMainFileToggle(true)}
               {mobileToolbarMoreOpen && (
                 <div
@@ -2626,26 +2499,17 @@ export function AppShell() {
               {renderMainFileToggle(false)}
             </div>
           )}
-          <BranchNavigator
-            tree={branchTree}
-            activeLeafId={branchActiveLeafId}
-            onLeafChange={handleBranchLeafChange}
-            inline
-            compact={isMobile}
-            containerRef={topBarRef}
-            open={activeTopPanel === "branches"}
-            onToggle={() => handleBranchesAction()}
-            hasSession={showChat}
-            hideInlineButton
-          />
           {/* Top panel dropdown — shared, only one active at a time */}
           {activeTopPanel && topPanelPos && (
             <div style={{
               position: "fixed",
               top: topPanelPos.top,
+              bottom: topPanelPos.bottom,
               left: topPanelPos.left,
               width: topPanelPos.width,
-              maxHeight: `calc(100dvh - ${topPanelPos.top}px)`,
+              maxHeight: topPanelPos.bottom != null
+                ? `min(70dvh, calc(100dvh - ${topPanelPos.bottom}px - 16px))`
+                : `calc(100dvh - ${topPanelPos.top ?? 0}px)`,
               overflowY: "auto",
               zIndex: 500,
             }}>
@@ -2866,6 +2730,7 @@ export function AppShell() {
       </div>
     </div>
     <AppStatusBar
+      ref={statusBarRef}
       soundEnabled={soundEnabled}
       onSoundToggle={onSoundToggle}
       toolPreset={statusToolPreset}
@@ -2875,6 +2740,51 @@ export function AppShell() {
       onAbortCompaction={handleStatusAbortCompaction}
       isCompacting={statusCompacting}
       compactDisabled={statusCompactDisabled}
+      gitBranch={statusGit?.branch ?? null}
+      gitDirty={statusGit?.dirty}
+      worktrees={statusGit?.worktrees}
+      currentWorktreePath={statusGit?.currentPath}
+      onSelectWorktree={statusGit ? handleSelectWorktree : undefined}
+      projectName={statusGit ? (getFileName(statusGit.projectRoot) || statusGit.projectRoot) : activeCwdName}
+      conversationBranchLabel={showChat ? (() => {
+        const tops = selectTopLevelBranches(branchTree);
+        if (tops.length === 0) return translate("statusbar.conversationBranches");
+        const index = Math.max(0, tops.findIndex((node) => treeContainsLeaf(node, branchActiveLeafId)));
+        return translate("statusbar.conversationBranchCount", { current: index + 1, total: tops.length });
+      })() : null}
+      conversationBranchesOpen={activeTopPanel === "branches"}
+      onConversationBranchesClick={showChat ? () => handleBranchesAction() : undefined}
+      tokenLabel={showChat && (sessionStats || contextUsage) ? (() => {
+        const tokens = sessionStats?.tokens;
+        const formatCompact = (value: number) => value >= 1_000_000
+          ? `${(value / 1_000_000).toFixed(1)}M`
+          : value >= 1000
+            ? `${(value / 1000).toFixed(0)}k`
+            : String(value);
+        if (contextUsage?.contextWindow && contextUsage.percent !== null) {
+          return `${contextUsage.percent.toFixed(0)}%`;
+        }
+        if (tokens && (tokens.input > 0 || tokens.output > 0)) {
+          return `${formatCompact(tokens.input + tokens.output)}`;
+        }
+        return translate("session.title");
+      })() : null}
+      tokenTitle={translate("session.title")}
+      tokenOpen={activeTopPanel === "session"}
+      onTokenClick={showChat ? () => toggleTopPanel("session") : undefined}
+    />
+    <BranchNavigator
+      tree={branchTree}
+      activeLeafId={branchActiveLeafId}
+      onLeafChange={handleBranchLeafChange}
+      inline
+      compact={isMobile}
+      containerRef={statusBarRef}
+      open={activeTopPanel === "branches"}
+      onToggle={() => handleBranchesAction()}
+      hasSession={showChat}
+      hideInlineButton
+      placement="above"
     />
     </div>
     {settingsOpen && (

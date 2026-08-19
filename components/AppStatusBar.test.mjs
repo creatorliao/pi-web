@@ -62,6 +62,32 @@ test("renders compact on the status bar and can switch to the abort label", () =
   assert.match(busy, /<rect x="2" y="2" width="12" height="12"/);
 });
 
+test("renders git and conversation branch on the left cluster", () => {
+  const html = renderToStaticMarkup(
+    React.createElement(
+      I18nProvider,
+      null,
+      React.createElement(AppStatusBar, {
+        soundEnabled: true,
+        onSoundToggle() {},
+        gitBranch: "dev-creator",
+        gitDirty: true,
+        projectName: "pi-web",
+        conversationBranchLabel: "Chat 1/2",
+        onConversationBranchesClick() {},
+        tokenLabel: "12%",
+        onTokenClick() {},
+      }),
+    ),
+  );
+
+  assert.match(html, /dev-creator\*/);
+  assert.match(html, />pi-web<\/span>/);
+  assert.match(html, /Chat 1\/2/);
+  assert.match(html, />12%<\/span>/);
+  assert.doesNotMatch(html, /DeepSeek|high/);
+});
+
 test("hides the tool preset when no change handler is provided", () => {
   const html = renderToStaticMarkup(
     React.createElement(

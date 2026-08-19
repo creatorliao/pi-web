@@ -1670,6 +1670,13 @@ span.token.table {
   opacity: 0.5;
   cursor: not-allowed;
 }
+.app-statusbar-item-static {
+  cursor: default;
+}
+.app-statusbar-item-static:hover {
+  color: var(--text-muted);
+  background: none;
+}
 .app-statusbar-menu {
   position: absolute;
   right: 0;
@@ -1681,4 +1688,13 @@ span.token.table {
   border-radius: 8px;
   box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.10);
   overflow: hidden;
+}
+.app-statusbar-menu-left {
+  right: auto;
+  left: 0;
+}
+@media (max-width: 720px) {
+  .app-statusbar-item-text {
+    display: none;
+  }
 }

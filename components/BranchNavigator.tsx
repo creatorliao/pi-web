@@ -22,6 +22,8 @@ interface Props {
   compact?: boolean;
   /** Keep the inline dropdown mounted while another control supplies its trigger */
   hideInlineButton?: boolean;
+  /** 底栏触发时向上展开，避免被系统任务栏挡住。 */
+  placement?: "below" | "above";
 }
 
 // Find the visible entry IDs on the path from root to activeLeafId.
@@ -250,12 +252,12 @@ function TreeNodeView({ node, activePathIds, depth, isLast, parentLines, onSelec
   );
 }
 
-export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, containerRef, open: openProp, onToggle, hasSession, compact, hideInlineButton }: Props) {
+export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, containerRef, open: openProp, onToggle, hasSession, compact, hideInlineButton, placement = "below" }: Props) {
   const { t } = useI18n();
   const [openInternal, setOpenInternal] = useState(false);
   const open = openProp !== undefined ? openProp : openInternal;
   const btnRef = useRef<HTMLButtonElement>(null);
-  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [dropdownPos, setDropdownPos] = useState<{ top?: number; bottom?: number; left: number; width: number } | null>(null);
 
   useEffect(() => {
     if (!open || !inline) return;
@@ -263,13 +265,22 @@ export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, cont
     if (!anchor) return;
     const update = () => {
       const rect = anchor.getBoundingClientRect();
+      // 底栏菜单贴着状态栏上沿打开。
+      if (placement === "above") {
+        setDropdownPos({
+          bottom: Math.max(8, window.innerHeight - rect.top + 4),
+          left: rect.left,
+          width: Math.min(Math.max(rect.width, 280), window.innerWidth - 16),
+        });
+        return;
+      }
       setDropdownPos({ top: rect.bottom, left: rect.left, width: rect.width });
     };
     update();
     const ro = new ResizeObserver(update);
     ro.observe(anchor);
     return () => ro.disconnect();
-  }, [open, inline, containerRef]);
+  }, [open, inline, containerRef, placement]);
 
   const activePathIds = useMemo(
     () => buildActivePath(tree, activeLeafId),
@@ -340,10 +351,13 @@ export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, cont
           <div style={{
             position: "fixed",
             top: dropdownPos.top,
+            bottom: dropdownPos.bottom,
             left: dropdownPos.left,
             width: dropdownPos.width,
             background: "var(--bg-panel)",
-            borderBottom: "1px solid var(--border)",
+            borderBottom: placement === "above" ? undefined : "1px solid var(--border)",
+            borderTop: placement === "above" ? "1px solid var(--border)" : undefined,
+            boxShadow: placement === "above" ? "0 -8px 24px rgba(0,0,0,0.12)" : undefined,
             zIndex: 500,
           }}>
             <div style={{ padding: "4px 12px 8px 12px", maxHeight: 260, overflowY: "auto" }}>
