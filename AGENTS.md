@@ -219,50 +219,50 @@ Location: `~/.pi/agent/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl`
 
 ---
 
+<!-- BEGIN:para-structure-agents -->
+
 ## docs / PARA 落盘约定
 
-`docs/` 是 PARA 根，下面只有四维目录：`01-Projects`、`02-Areas`、`03-Resources`、`04-Archives`。在这些目录里写文档时按下面执行，避免再理解成「先建主题夹再塞文件」。
+`docs/`（或当前 PARA 根）下只有四维：`01-Projects`、`02-Areas`、`03-Resources`、`04-Archives`。
 
-### 编号
+**按维分流，不要混用。** 创建或补全 PARA 目录时同步维护本锚点块，是推荐做法。
 
-人工新建的调查报告、规范、笔记、领域文档，文件名必须带 **日期 + 当日序号**：
+| 维 | 放什么 | 是否建主题子文件夹 |
+|----|--------|-------------------|
+| `01-Projects` | 每次输入的**需求、方案**及同主题配套稿（任务、调查、改善报告等） | **要**：一个主题一个项目夹 |
+| `02-Areas` | 长期维护的规范、领域笔记、调查备忘（无明确交付闭环） | **不要**：文件直接落在该维根下 |
+| `03-Resources` | 外部参考、剪藏 | **不要** |
+| `04-Archives` | 已结束项目整体迁入 | **不要**为新主题 mkdir；迁入时保持原项目夹 |
+
+### `01-Projects`：需求 / 方案按主题夹
+
+落到 `01-Projects/<项目夹>/`，不要散落到另外三维。
 
 ```text
-YYYYMMDD-xx-主题.md
+R{YYYYMMDD}-xx-主题
 ```
 
-- `YYYYMMDD`：创建日（本机日历）
-- `xx`：该四维目录下**同一天**已有同前缀文件的下一号，两位，从 `01` 起
-- 主题用简短中文或英文，不要再套「调查报告_」一层目录
+- `{YYYYMMDD}`：创建日；`xx` 为当日已有同前缀夹的下一号（从 `01` 起）
+- 夹内用 `00-README.md`、`01-需求_….md`、`02-方案_….md` 等编号文件，不要再套一层主题子目录
+- 已有同主题夹则追加文件，不要平行再开一夹
+- 新建夹优先：`para-structure cp "主题"`
 
-示例（正确）：
+### 另外三维：禁止再嵌套主题子文件夹
 
-```text
-docs/02-Areas/20260819-01-pi-web与本机pi内核关系.md
-docs/02-Areas/20260819-02-另一主题.md
-```
-
-落盘前先列出目标四维目录根下已有的 `YYYYMMDD-*.md`，再取当日最大序号 + 1。
-
-### 禁止再嵌套子文件夹
-
-**四维目录的根下直接放文件，不要再 mkdir 一层。**
+`02-Areas`、`03-Resources`、`04-Archives` 的根下直接放 `YYYYMMDD-xx-主题.md`（序号按该维根下当天已有同前缀文件计）。
 
 | 不要 | 要 |
 |------|----|
-| `docs/02-Areas/20260819-01-主题/调查报告.md` | `docs/02-Areas/20260819-01-主题.md` |
-| `docs/02-Areas/20260819-01-主题/` 空夹或再套子夹 | 单个 `.md` 落在 `02-Areas/` |
-| 为「一套报告」再建 `00-README` / `01-…` 子目录 | 需要多份时：同目录下多个 `YYYYMMDD-xx-….md`，或同一文件加章节 |
+| `02-Areas/主题/需求.md` 或 `02-Areas/YYYYMMDD-xx-主题-需求.md` | `01-Projects/R…-主题/01-需求_….md` |
+| 在 Resources / Archives 根下为新主题 mkdir | 单文件落在该维根下（归档迁入的整夹除外） |
 
-对 `01-Projects`、`03-Resources`、`04-Archives` 同样适用：不要在 PARA 四维目录内再嵌套主题子文件夹。
+`.gitkeep` 与 PARA 根 `README.md` 是脚手架，不要删。
 
-`.gitkeep` 与 `docs/README.md` 是脚手架，不要删、不要挪进子夹。
+<!-- END:para-structure-agents -->
 
-### 和 `para-structure cp` 的边界
+### 本仓对照（锚点外，doctor 不覆盖）
 
-日常写调查报告、规范、笔记：**不要**调用 `para-structure cp`，也**不要**手建 `R{YYYYMMDD}-xx-标题/` 项目夹。
-
-只有用户**明确**说「用 para 建项目目录 / para-structure cp」时，才允许 `01-Projects` 下出现 CLI 生成的项目文件夹。
+PARA 根是 `docs/`。领域笔记示例：`docs/02-Areas/20260819-01-pi-web与本机pi内核关系.md`。专题夹示例：`docs/01-Projects/R20260819-03-界面Cursor化布局/`、`R20260819-09-历史与系统提示进文件区/`。只说「写需求/方案」而未点名 CLI 时，也可手建同名 `R{YYYYMMDD}-xx-主题` 夹。需求/方案按子主题进 `01-Projects`，不要写成 `02-Areas/YYYYMMDD-xx-主题-需求.md`。
 
 <!-- BEGIN:nextjs-agent-rules -->
 
