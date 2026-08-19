@@ -10,6 +10,7 @@ import {
   joinFilePath,
   normalizeFilePathSlashes,
 } from "@/lib/file-paths";
+import { filterExplorerEntries } from "@/lib/explorer-visibility";
 import type { GitFileStatus, GitFileStatusKind, GitStatusResponse } from "@/lib/git-types";
 import { useI18n } from "@/hooks/useI18n";
 type Translate = ReturnType<typeof useI18n>["t"];
@@ -39,6 +40,8 @@ interface Props {
   onUploadBusyChange?: (busy: boolean) => void;
   changesCollapsed: boolean;
   onChangesCountChange?: (count: number) => void;
+  /** 为 false 时隐藏点文件与构建目录，避免目录树像 IDE 调试台。 */
+  showHiddenFiles?: boolean;
 }
 
 export interface FileExplorerHandle {
@@ -221,6 +224,7 @@ function TreeNode({
   highlightedPaths,
   gitStatusByPath,
   changedDirectoryPaths,
+  showHiddenFiles,
   t,
 }: {
   node: FileNode;
@@ -234,6 +238,7 @@ function TreeNode({
   highlightedPaths: Set<string>;
   gitStatusByPath: Map<string, GitFileStatus>;
   changedDirectoryPaths: Set<string>;
+  showHiddenFiles: boolean;
   t: Translate;
 }) {
   const open = expandedPaths.has(node.fullPath);
@@ -253,14 +258,14 @@ function TreeNode({
     setLoading(true);
     try {
       const entries = await fetchEntries(node.fullPath);
-      setChildren(entries);
+      setChildren(filterExplorerEntries(entries, showHiddenFiles));
       setLoaded(true);
     } catch {
       // ignore
     } finally {
       setLoading(false);
     }
-  }, [loaded, node.fullPath]);
+  }, [loaded, node.fullPath, showHiddenFiles]);
 
   // Re-fetch children when the tree refreshes and the directory is open.
   useEffect(() => {
@@ -268,7 +273,7 @@ function TreeNode({
       loadChildren(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshToken]);
+  }, [refreshToken, showHiddenFiles]);
 
   const handleClick = useCallback(() => {
     if (node.isDir) {
@@ -443,6 +448,7 @@ function TreeNode({
               highlightedPaths={highlightedPaths}
               gitStatusByPath={gitStatusByPath}
               changedDirectoryPaths={changedDirectoryPaths}
+              showHiddenFiles={showHiddenFiles}
               t={t}
             />
           ))}
@@ -523,6 +529,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   onUploadBusyChange,
   changesCollapsed,
   onChangesCountChange,
+  showHiddenFiles = false,
 }, ref) {
   const { t } = useI18n();
   const [roots, setRoots] = useState<FileNode[]>([]);
@@ -687,11 +694,11 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     setError(null);
     let cancelled = false;
     fetchEntries(cwd)
-      .then((entries) => { if (!cancelled) setRoots(entries); })
+      .then((entries) => { if (!cancelled) setRoots(filterExplorerEntries(entries, showHiddenFiles)); })
       .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [cwd, refreshKey, treeRefreshKey]);
+  }, [cwd, refreshKey, treeRefreshKey, showHiddenFiles]);
 
   useEffect(() => {
     let cancelled = false;
@@ -890,6 +897,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
                 highlightedPaths={highlightedPaths}
                 gitStatusByPath={gitStatusByPath}
                 changedDirectoryPaths={changedDirectoryPaths}
+                showHiddenFiles={showHiddenFiles}
                 t={t}
               />
             ))

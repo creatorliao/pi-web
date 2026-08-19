@@ -13,6 +13,8 @@ export interface Tab {
   initialDisplayMode?: FileViewerDisplayMode;
   viewerState?: FileViewerState;
   viewerRevision?: number;
+  /** 虚拟 Markdown 正文。有值时 FileViewer 不读磁盘。 */
+  virtualContent?: string;
 }
 
 interface Props {

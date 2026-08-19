@@ -5,8 +5,11 @@ import { ModelsConfig } from "./ModelsConfig";
 import { SkillsConfig } from "./SkillsConfig";
 import { PluginsConfig } from "./PluginsConfig";
 import { useTheme, type ThemePreference } from "@/hooks/useTheme";
+import { useLayoutMode } from "@/hooks/useLayoutMode";
+import { useExplorerVisibility } from "@/hooks/useExplorerVisibility";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import type { WorkspaceLayoutMode } from "@/lib/layout-mode";
 
 export type SettingsSection = "appearance" | "models" | "skills" | "plugins";
 
@@ -54,6 +57,8 @@ export function SettingsDialog({
   const isMobile = useIsMobile();
   const { t, locale, setLocale, supportedLocales } = useI18n();
   const { preference, setThemePreference } = useTheme();
+  const { layoutMode, setLayoutMode } = useLayoutMode();
+  const { showHiddenFiles, setShowHiddenFiles } = useExplorerVisibility();
   const hasProject = Boolean(cwd);
   const [section, setSection] = useState<SettingsSection>(() => {
     const stored = readStoredSection();
@@ -248,6 +253,50 @@ export function SettingsDialog({
                     );
                   })}
                 </div>
+
+                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", marginBottom: 10 }}>
+                  {t("settings.layout")}
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 28, maxWidth: 480 }}>
+                  {([
+                    { id: "editor" as WorkspaceLayoutMode, label: t("settings.layoutEditor"), hint: t("settings.layoutEditorHint") },
+                    { id: "assistant" as WorkspaceLayoutMode, label: t("settings.layoutAssistant"), hint: t("settings.layoutAssistantHint") },
+                  ]).map((option) => {
+                    const selected = layoutMode === option.id;
+                    return (
+                      <button
+                        key={option.id}
+                        type="button"
+                        onClick={() => setLayoutMode(option.id)}
+                        style={{
+                          textAlign: "left",
+                          padding: "10px 12px",
+                          borderRadius: 8,
+                          border: selected ? "1px solid var(--accent)" : "1px solid var(--border)",
+                          background: selected ? "var(--bg-selected)" : "var(--bg-hover)",
+                          color: "var(--text)",
+                          cursor: "pointer",
+                        }}
+                      >
+                        <div style={{ fontSize: 13, fontWeight: selected ? 600 : 500 }}>{option.label}</div>
+                        <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4, lineHeight: 1.45 }}>{option.hint}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <label style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 28, cursor: "pointer", maxWidth: 480 }}>
+                  <input
+                    type="checkbox"
+                    checked={showHiddenFiles}
+                    onChange={(event) => setShowHiddenFiles(event.target.checked)}
+                    style={{ marginTop: 3 }}
+                  />
+                  <span>
+                    <span style={{ display: "block", fontSize: 13, color: "var(--text)" }}>{t("settings.showHiddenFiles")}</span>
+                    <span style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginTop: 4, lineHeight: 1.45 }}>{t("settings.showHiddenFilesHint")}</span>
+                  </span>
+                </label>
 
                 <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", marginBottom: 10 }}>
                   {t("common.language")}

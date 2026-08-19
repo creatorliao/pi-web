@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import type { SessionInfo } from "@/lib/types";
 import { loadExplorerOpen, saveExplorerOpen } from "@/lib/file-explorer-state";
 import { dispatchSessionRowContextMenu } from "@/lib/session-row-context-menu";
@@ -102,6 +103,9 @@ interface Props {
    *  Lets the app play a cross-workspace completion tone. */
   onBackgroundTaskDone?: () => void;
   onRunningSessionIdsChange?: (ids: Set<string>) => void;
+  /** 有宿主时，会话列表渲染到对话块，左栏只留项目和目录。 */
+  sessionListPortalTarget?: HTMLElement | null;
+  showHiddenFiles?: boolean;
 }
 
 interface WorktreeEntry {
@@ -392,7 +396,7 @@ function PiWebTitle() {
   );
 }
 
-export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, onRunningSessionIdsChange }: Props) {
+export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, onRunningSessionIdsChange, sessionListPortalTarget, showHiddenFiles = false }: Props) {
   const { t } = useI18n();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -978,6 +982,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
           <PiWebTitle />
+          {!sessionListPortalTarget && (
           <div style={{ display: "flex", gap: 6 }}>
             <button
               onClick={handleNewSession}
@@ -1057,6 +1062,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               )}
             </button>
           </div>
+          )}
         </div>
 
         {/* CWD picker */}
@@ -1618,8 +1624,19 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         )}
       </div>
 
-      {/* Session list */}
-      <div style={{ flex: explorerOpen && (selectedCwdProp || selectedCwd) ? "1 1 0" : "1 1 auto", overflowY: "auto", padding: "0", minHeight: 80 }}>
+      {/* Session list：无门户时仍在左栏；有门户则渲染到对话块。 */}
+      {(() => {
+        const sessionList = (
+      <div
+        data-session-list="true"
+        style={{
+          flex: sessionListPortalTarget ? "1 1 auto" : (explorerOpen && (selectedCwdProp || selectedCwd) ? "1 1 0" : "1 1 auto"),
+          overflowY: "auto",
+          padding: "0",
+          minHeight: sessionListPortalTarget ? 0 : 80,
+          height: sessionListPortalTarget ? "100%" : undefined,
+        }}
+      >
         {loading && (
           <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 12 }}>
             {t("sidebar.loading")}
@@ -1652,6 +1669,10 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           />
         ))}
       </div>
+        );
+        if (sessionListPortalTarget) return createPortal(sessionList, sessionListPortalTarget);
+        return sessionList;
+      })()}
 
       {/* File Explorer section */}
       {(selectedCwdProp || selectedCwd) && (
@@ -1765,6 +1786,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 onUploadBusyChange={setExplorerUploadBusy}
                 changesCollapsed={changesCollapsed}
                 onChangesCountChange={setChangesCount}
+                showHiddenFiles={showHiddenFiles}
               />
             </div>
           )}

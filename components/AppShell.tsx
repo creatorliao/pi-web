@@ -12,6 +12,8 @@ import { SettingsDialog } from "./SettingsDialog";
 import { ProjectTrustDialog } from "./ProjectTrustDialog";
 import { BranchNavigator } from "./BranchNavigator";
 import { useI18n } from "@/hooks/useI18n";
+import { useLayoutMode } from "@/hooks/useLayoutMode";
+import { useExplorerVisibility } from "@/hooks/useExplorerVisibility";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useViewportHeight } from "@/hooks/useViewportHeight";
 import { useResizablePanel } from "@/hooks/useResizablePanel";
@@ -42,11 +44,14 @@ import {
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
 } from "@/lib/panel-layout";
-import type { BlockingExtensionUiRequest, SessionInfo, SessionTreeNode } from "@/lib/types";
+import type { AgentMessage, BlockingExtensionUiRequest, SessionInfo, SessionTreeNode } from "@/lib/types";
 import type { ProjectTrustStatus } from "@/lib/api-types";
 import type { ChatInputHandle } from "./ChatInput";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 import type { FileViewerState } from "@/lib/file-viewer-state";
+import { formatSessionHistoryMarkdown } from "@/lib/session-virtual-docs";
+import { formatSystemPromptView } from "@/lib/system-prompt-view";
+import { isVirtualFilePath, virtualDocPath } from "@/lib/virtual-files";
 
 type SessionCopyField = "file" | "id";
 type AutoNameStatus =
@@ -57,7 +62,7 @@ type AutoNameStatus =
 
 const TOP_BAR_ICON_BUTTON_SIZE = 36;
 /** 侧栏窄于此时「设置」只显示齿轮，避免挤掉标签。 */
-const SETTINGS_LABEL_MIN_WIDTH = 200;
+const SETTINGS_LABEL_MIN_WIDTH = 220;
 
 export function AppShell() {
   const router = useRouter();
@@ -65,6 +70,12 @@ export function AppShell() {
   const [initialNavigation] = useState(() => getInitialNavigation(searchParams));
   const { locale, t: translate } = useI18n();
   const isMobile = useIsMobile();
+  const { layoutMode } = useLayoutMode();
+  const { showHiddenFiles } = useExplorerVisibility();
+  // 手机保持「中间对话」；桌面才按设置换槽。
+  const isEditorLayout = !isMobile && layoutMode === "editor";
+  const [sessionListHost, setSessionListHost] = useState<HTMLDivElement | null>(null);
+  const [agentHistoryOpen, setAgentHistoryOpen] = useState(true);
   useViewportHeight();
   // Audio ownership lives here (not in ChatWindow) so the completion tone can
   // also fire for tasks finishing in a non-active workspace whose ChatWindow
@@ -100,7 +111,7 @@ export function AppShell() {
   const [projectTrustBusy, setProjectTrustBusy] = useState(false);
   const [projectTrustError, setProjectTrustError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  const [rightPanelOpen, setRightPanelOpen] = useState(true);
   const [mobileToolbarMoreOpen, setMobileToolbarMoreOpen] = useState(false);
   const [mobileSidebarReady, setMobileSidebarReady] = useState(false);
   const sidebarWidthRef = useRef(SIDEBAR_DEFAULT_WIDTH);
@@ -159,7 +170,10 @@ export function AppShell() {
   // On mobile the sidebar is an overlay drawer; hide it by default so the chat
   // is visible on load. Runs once the breakpoint resolves after hydration.
   useEffect(() => {
-    if (isMobile) setSidebarOpen(false);
+    if (isMobile) {
+      setSidebarOpen(false);
+      setRightPanelOpen(false);
+    }
   }, [isMobile]);
   useEffect(() => {
     setMobileSidebarReady(true);
@@ -192,16 +206,15 @@ export function AppShell() {
 
   const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
   const [systemPromptLoading, setSystemPromptLoading] = useState(false);
-  const systemPromptLoaderRef = useRef<(() => Promise<void>) | null>(null);
+  const systemPromptLoaderRef = useRef<(() => Promise<string>) | null>(null);
   const systemPromptLoadIdRef = useRef(0);
-  const systemBtnRef = useRef<HTMLButtonElement>(null);
 
   const handleSystemPromptChange = useCallback((prompt: string | null) => {
     setSystemPrompt(prompt);
     setSystemPromptLoading(false);
   }, []);
 
-  const handleSystemPromptLoaderChange = useCallback((loader: (() => Promise<void>) | null) => {
+  const handleSystemPromptLoaderChange = useCallback((loader: (() => Promise<string>) | null) => {
     systemPromptLoadIdRef.current += 1;
     systemPromptLoaderRef.current = loader;
     setSystemPromptLoading(false);
@@ -240,11 +253,11 @@ export function AppShell() {
   }, []);
 
   // Single active panel — only one dropdown open at a time
-  const [activeTopPanel, setActiveTopPanel] = useState<"branches" | "system" | "session" | null>(null);
+  const [activeTopPanel, setActiveTopPanel] = useState<"branches" | "session" | null>(null);
   const [topPanelPos, setTopPanelPos] = useState<{ top: number; left: number; width: number } | null>(null);
 
   const toggleTopPanel = useCallback((
-    panel: "branches" | "system" | "session",
+    panel: "branches" | "session",
     keepMobileToolbarOpen = false,
   ) => {
     if (isMobile) setSidebarOpen(false);
@@ -252,24 +265,6 @@ export function AppShell() {
     setActiveTopPanel((cur) => cur === panel ? null : panel);
     if (isMobile && keepMobileToolbarOpen) setMobileToolbarMoreOpen(true);
   }, [isMobile]);
-
-  const handleSystemPromptToggle = useCallback((keepMobileToolbarOpen = false) => {
-    const opening = activeTopPanel !== "system";
-    toggleTopPanel("system", keepMobileToolbarOpen);
-    if (!opening || systemPromptLoading) return;
-
-    const load = systemPromptLoaderRef.current;
-    if (!load) return;
-    const loadId = ++systemPromptLoadIdRef.current;
-    setSystemPromptLoading(true);
-    void load().catch((error) => {
-      console.error("Failed to load system prompt:", error);
-    }).finally(() => {
-      if (systemPromptLoadIdRef.current === loadId) {
-        setSystemPromptLoading(false);
-      }
-    });
-  }, [activeTopPanel, systemPromptLoading, toggleTopPanel]);
 
   const openSessionStatsPanel = useCallback(() => {
     if (isMobile) setSidebarOpen(false);
@@ -361,6 +356,72 @@ export function AppShell() {
   // Right panel — file tabs only
   const [fileTabs, setFileTabs] = useState<Tab[]>([]);
   const [activeFileTabId, setActiveFileTabId] = useState<string | null>(null);
+
+  /**
+   * 在右侧文件区打开虚拟 Markdown：复用标签栏与 FileViewer，不写磁盘。
+   */
+  const openVirtualMarkdown = useCallback((
+    filePath: string,
+    fileName: string,
+    content: string,
+  ) => {
+    const tabId = `file:${filePath}`;
+    setFileTabs((prev) => {
+      const existing = prev.find((tab) => tab.id === tabId);
+      if (!existing) {
+        return [...prev, {
+          id: tabId,
+          label: fileName,
+          filePath,
+          virtualContent: content,
+          viewerRevision: 0,
+        }];
+      }
+      return prev.map((tab) => (
+        tab.id === tabId
+          ? { ...tab, virtualContent: content, viewerRevision: (tab.viewerRevision ?? 0) + 1 }
+          : tab
+      ));
+    });
+    setActiveFileTabId(tabId);
+    // 编辑器布局下右侧是对话栏，打开文件不应依赖「打开文件面板」。
+    if (!isEditorLayout) setRightPanelOpen(true);
+    setActiveTopPanel(null);
+    setSessionToolsMenuOpen(false);
+    if (isMobile) {
+      setSidebarOpen(false);
+      setMobileToolbarMoreOpen(false);
+    }
+  }, [isEditorLayout, isMobile]);
+
+  const handleOpenSystemPrompt = useCallback(async () => {
+    const sessionId = selectedSession?.id;
+    if (!sessionId) return;
+    const loadId = ++systemPromptLoadIdRef.current;
+    setSystemPromptLoading(true);
+    try {
+      const load = systemPromptLoaderRef.current;
+      const prompt = load ? await load() : (systemPrompt ?? "");
+      if (systemPromptLoadIdRef.current !== loadId) return;
+      openVirtualMarkdown(
+        virtualDocPath("system", sessionId),
+        translate("files.systemTab"),
+        formatSystemPromptView(prompt, sessionId),
+      );
+    } catch (error) {
+      if (systemPromptLoadIdRef.current !== loadId) return;
+      openVirtualMarkdown(
+        virtualDocPath("system", sessionId),
+        translate("files.systemTab"),
+        formatSystemPromptView(
+          translate("files.systemLoadFailed", { error: error instanceof Error ? error.message : String(error) }),
+          sessionId,
+        ),
+      );
+    } finally {
+      if (systemPromptLoadIdRef.current === loadId) setSystemPromptLoading(false);
+    }
+  }, [openVirtualMarkdown, selectedSession?.id, systemPrompt, translate]);
 
   const handleFileViewerStateChange = useCallback((
     tabId: string,
@@ -804,10 +865,10 @@ export function AppShell() {
       tabId,
     }));
     setActiveFileTabId(tabId);
-    setRightPanelOpen(true);
+    if (!isEditorLayout) setRightPanelOpen(true);
     // On mobile the file panel is full-screen; close the drawer so it shows.
     if (isMobile) setSidebarOpen(false);
-  }, [isMobile]);
+  }, [isEditorLayout, isMobile]);
 
   const handleOpenLinkedFile = useCallback((filePath: string) => {
     handleOpenFile(filePath, getFileName(filePath), { sourceSessionId: selectedSession?.id ?? null });
@@ -816,7 +877,7 @@ export function AppShell() {
   const handleCloseFileTab = useCallback((tabId: string) => {
     setFileTabs((prev) => {
       const next = prev.filter((t) => t.id !== tabId);
-      if (next.length === 0) setRightPanelOpen(false);
+      if (next.length === 0 && !isEditorLayout) setRightPanelOpen(false);
       return next;
     });
     setActiveFileTabId((cur) => {
@@ -824,16 +885,50 @@ export function AppShell() {
       const remaining = fileTabs.filter((t) => t.id !== tabId);
       return remaining.length > 0 ? remaining[remaining.length - 1].id : null;
     });
-  }, [fileTabs]);
+  }, [fileTabs, isEditorLayout]);
 
-  const handleViewFullHistory = useCallback(() => {
+  useEffect(() => {
+    if (isMobile) return;
+    if (layoutMode === "editor") setRightPanelOpen(true);
+    else setRightPanelOpen(fileTabs.length > 0);
+  }, [isMobile, layoutMode]);
+
+  const handleViewFullHistory = useCallback(async () => {
     if (!selectedSession) return;
-    window.open(
-      `/api/sessions/${encodeURIComponent(selectedSession.id)}/export?inline=1`,
-      "_blank",
-      "noopener,noreferrer",
-    );
-  }, [selectedSession]);
+    const sessionId = selectedSession.id;
+    try {
+      const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
+      const data = await response.json() as {
+        error?: string;
+        filePath?: string;
+        info?: { name?: string | null };
+        context?: { messages?: AgentMessage[] };
+      };
+      if (!response.ok || data.error) {
+        throw new Error(data.error ?? `HTTP ${response.status}`);
+      }
+      openVirtualMarkdown(
+        virtualDocPath("history", sessionId),
+        translate("files.historyTab"),
+        formatSessionHistoryMarkdown({
+          sessionId,
+          name: data.info?.name ?? selectedSession.name,
+          filePath: data.filePath,
+          messages: data.context?.messages ?? [],
+        }),
+      );
+    } catch (error) {
+      openVirtualMarkdown(
+        virtualDocPath("history", sessionId),
+        translate("files.historyTab"),
+        formatSessionHistoryMarkdown({
+          sessionId,
+          name: selectedSession.name,
+          messages: [],
+        }) + `\n\n${translate("files.historyLoadFailed", { error: error instanceof Error ? error.message : String(error) })}`,
+      );
+    }
+  }, [openVirtualMarkdown, selectedSession, translate]);
 
   // Show chat area if a session is selected, or if we have a cwd to start a new session in
   const effectiveNewSessionCwd = newSessionCwd ?? (selectedSession === null && activeCwd ? activeCwd : null);
@@ -928,6 +1023,8 @@ export function AppShell() {
         onAtMentions={handleAtMentions}
         onBackgroundTaskDone={handleBackgroundTaskDone}
         onRunningSessionIdsChange={handleRunningSessionIdsChange}
+        sessionListPortalTarget={isMobile ? null : sessionListHost}
+        showHiddenFiles={showHiddenFiles}
       />
       <div style={{ padding: "8px", flexShrink: 0 }}>
         <button
@@ -943,10 +1040,10 @@ export function AppShell() {
             width: "100%",
             display: "flex",
             alignItems: "center",
-            justifyContent: "center",
+            justifyContent: "flex-start",
             gap: 6,
             height: 32,
-            padding: 0,
+            padding: "0 10px",
             background: settingsOpen ? "var(--bg-hover)" : "none",
             border: "none",
             borderRadius: 9,
@@ -1035,7 +1132,7 @@ export function AppShell() {
         <button
           type="button"
           onClick={() => {
-            handleViewFullHistory();
+            void handleViewFullHistory();
             if (mobile) setMobileToolbarMoreOpen(true);
           }}
           disabled={!selectedSession}
@@ -1210,23 +1307,21 @@ export function AppShell() {
           />
         )}
         <button
-          ref={systemBtnRef}
           type="button"
-          onClick={() => handleSystemPromptToggle(mobile)}
+          onClick={() => { void handleOpenSystemPrompt(); }}
           disabled={mobile && !showChat}
           title={translate("system.prompt")}
           aria-label={translate("system.prompt")}
-          aria-pressed={activeTopPanel === "system"}
           style={{
             display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
             width: mobile ? TOP_BAR_ICON_BUTTON_SIZE : undefined,
             height: "100%", padding: mobile ? 0 : "0 12px",
-            background: activeTopPanel === "system" ? "var(--bg-selected)" : "none",
+            background: "none",
             border: "none",
-            borderTop: activeTopPanel === "system" ? "2px solid var(--accent)" : "2px solid transparent",
+            borderTop: "2px solid transparent",
             borderRight: "1px solid var(--border)",
             cursor: mobile && !showChat ? "not-allowed" : "pointer",
-            color: activeTopPanel === "system" ? "var(--text)" : "var(--text-muted)",
+            color: "var(--text-muted)",
             opacity: mobile && !showChat ? 0.45 : 1,
             fontSize: 11, whiteSpace: "nowrap", transition: "color 0.1s, background 0.1s",
           }}
@@ -1235,7 +1330,7 @@ export function AppShell() {
             event.currentTarget.style.color = "var(--text)";
           }}
           onMouseLeave={(event) => {
-            event.currentTarget.style.color = activeTopPanel === "system" ? "var(--text)" : "var(--text-muted)";
+            event.currentTarget.style.color = "var(--text-muted)";
           }}
           data-mobile-toolbar-action={mobile ? "system" : undefined}
         >
@@ -1273,7 +1368,7 @@ export function AppShell() {
         key: "history",
         label: translate("history.label"),
         disabled: !selectedSession,
-        onSelect: () => handleViewFullHistory(),
+        onSelect: () => { void handleViewFullHistory(); },
       },
       {
         key: "title",
@@ -1295,7 +1390,8 @@ export function AppShell() {
       {
         key: "system",
         label: translate("system.label"),
-        onSelect: () => handleSystemPromptToggle(),
+        disabled: !selectedSession,
+        onSelect: () => { void handleOpenSystemPrompt(); },
       },
     ];
 
@@ -1559,8 +1655,12 @@ export function AppShell() {
         aria-controls="file-panel"
         aria-expanded={rightPanelOpen}
         aria-hidden={covered ? true : undefined}
-        title={rightPanelOpen ? translate("files.hidePanel") : translate("files.showPanel")}
-        aria-label={rightPanelOpen ? translate("files.hidePanel") : translate("files.showPanel")}
+        title={rightPanelOpen
+          ? translate(isEditorLayout ? "files.hideAgentPanel" : "files.hidePanel")
+          : translate(isEditorLayout ? "files.showAgentPanel" : "files.showPanel")}
+        aria-label={rightPanelOpen
+          ? translate(isEditorLayout ? "files.hideAgentPanel" : "files.hidePanel")
+          : translate(isEditorLayout ? "files.showAgentPanel" : "files.showPanel")}
         data-mobile-toolbar-file={mobile ? "true" : undefined}
         style={{
           marginLeft: !mobile && !sessionStats && !contextUsage ? "auto" : 0,
@@ -1582,6 +1682,207 @@ export function AppShell() {
       </button>
     );
   };
+
+  const fileWorkspace = (
+    <div
+      data-workspace="files"
+      style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0, background: "var(--bg)" }}
+    >
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        flexShrink: 0,
+        height: 36,
+        background: "var(--bg-panel)",
+        borderBottom: "1px solid var(--border)",
+      }}>
+        <div style={{ flex: 1, overflow: "hidden" }}>
+          <TabBar
+            tabs={fileTabs}
+            activeTabId={activeFileTabId ?? ""}
+            onSelectTab={setActiveFileTabId}
+            onCloseTab={handleCloseFileTab}
+          />
+        </div>
+      </div>
+      <div style={{ flex: 1, overflow: "hidden", paddingBottom: "env(safe-area-inset-bottom)" }}>
+        {activeFileTab?.filePath ? (
+          <FileViewer
+            key={`${activeFileTab.id}:${activeFileTab.viewerRevision ?? 0}`}
+            filePath={activeFileTab.filePath}
+            virtualContent={activeFileTab.virtualContent}
+            cwd={activeCwd ?? undefined}
+            sourceSessionId={activeFileTab.sourceSessionId}
+            gitRefreshKey={explorerRefreshKey}
+            initialDisplayMode={activeFileTab.initialDisplayMode}
+            initialState={activeFileTab.viewerState}
+            watchEnabled={isEditorLayout || rightPanelOpen}
+            onStateChange={(viewerState) => handleFileViewerStateChange(
+              activeFileTab.id,
+              activeFileTab.viewerRevision ?? 0,
+              viewerState,
+            )}
+            onMentionLines={(isEditorLayout || rightPanelOpen) && !isVirtualFilePath(activeFileTab.filePath) ? handleFileLineMention : undefined}
+            onAtMention={isVirtualFilePath(activeFileTab.filePath) ? undefined : handleAtMention}
+            onOpenFile={(filePath) => handleOpenFile(
+              filePath,
+              getFileName(filePath),
+              { sourceSessionId: activeFileTab.sourceSessionId },
+            )}
+          />
+        ) : (
+          <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", fontSize: 13, padding: 24, textAlign: "center" }}>
+            {translate(isEditorLayout ? "workspace.emptyEditor" : "files.noneOpen")}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  const agentWorkspace = (
+    <div
+      data-workspace="agent"
+      style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}
+    >
+      {!isMobile && (
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          flexShrink: 0,
+          height: 36,
+          background: "var(--bg-panel)",
+          borderBottom: "1px solid var(--border)",
+          gap: 6,
+          padding: "0 8px",
+        }}>
+          <button
+            type="button"
+            onClick={() => {
+              const cwd = activeCwd ?? selectedSession?.cwd;
+              if (!cwd) return;
+              const tempId = typeof crypto.randomUUID === "function"
+                ? crypto.randomUUID()
+                : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+              handleNewSession(tempId, cwd);
+            }}
+            disabled={!activeCwd && !selectedSession?.cwd}
+            title={translate("sidebar.new")}
+            style={{
+              display: "flex", alignItems: "center", gap: 5,
+              height: 26, padding: "0 10px",
+              background: "var(--bg-hover)",
+              border: "1px solid var(--border)",
+              borderRadius: 7,
+              color: (activeCwd || selectedSession?.cwd) ? "var(--text)" : "var(--text-dim)",
+              cursor: (activeCwd || selectedSession?.cwd) ? "pointer" : "not-allowed",
+              fontSize: 12,
+            }}
+          >
+            <span aria-hidden="true">+</span>
+            {translate("sidebar.new")}
+          </button>
+          <button
+            type="button"
+            onClick={() => setAgentHistoryOpen((open) => !open)}
+            aria-pressed={agentHistoryOpen}
+            title={translate(agentHistoryOpen ? "chat.hideHistory" : "chat.historyList")}
+            style={{
+              display: "flex", alignItems: "center",
+              height: 26, padding: "0 10px",
+              background: agentHistoryOpen ? "var(--bg-selected)" : "none",
+              border: "1px solid var(--border)",
+              borderRadius: 7,
+              color: "var(--text-muted)",
+              cursor: "pointer",
+              fontSize: 12,
+            }}
+          >
+            {translate("chat.historyList")}
+          </button>
+        </div>
+      )}
+      {!isMobile && (
+        <div
+          ref={setSessionListHost}
+          style={{
+            height: agentHistoryOpen ? 220 : 0,
+            flexShrink: 0,
+            overflow: "hidden",
+            borderBottom: agentHistoryOpen ? "1px solid var(--border)" : "none",
+            background: "var(--bg-panel)",
+          }}
+        />
+      )}
+      <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
+        {showChat ? (
+          <ChatWindow
+            key={sessionKey}
+            session={selectedSession}
+            sessionRunning={Boolean(selectedSession && runningSessionIds.has(selectedSession.id))}
+            newSessionCwd={effectiveNewSessionCwd}
+            newSessionDraftKey={newSessionDraftKey}
+            onAgentEnd={handleAgentEnd}
+            onAttentionNeeded={handleAttentionNeeded}
+            onSessionCreated={handleSessionCreated}
+            onSessionForked={handleSessionForked}
+            modelsRefreshKey={modelsRefreshKey}
+            chatInputRef={chatInputRef}
+            onBranchDataChange={handleBranchDataChange}
+            onSystemPromptChange={handleSystemPromptChange}
+            onSystemPromptLoaderChange={handleSystemPromptLoaderChange}
+            onSessionStatsChange={handleSessionStatsChange}
+            onSessionStatsPanelOpen={openSessionStatsPanel}
+            onContextUsageChange={handleContextUsageChange}
+            onOpenFile={handleOpenLinkedFile}
+            soundEnabled={soundEnabled}
+            onSoundToggle={onSoundToggle}
+            playDoneSound={playDoneSound}
+            unlockAudio={unlockAudio}
+          />
+        ) : initialCwdStatus === "validating" ? (
+          <div
+            role="status"
+            style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, padding: 24, color: "var(--text-muted)", textAlign: "center" }}
+          >
+            <div style={{ fontSize: 14, color: "var(--text)" }}>{translate("workspace.opening")}</div>
+            <div style={{ maxWidth: "min(720px, 100%)", overflowWrap: "anywhere", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+              {initialNavigation.requestedCwd}
+            </div>
+          </div>
+        ) : initialCwdStatus === "error" ? (
+          <div
+            role="alert"
+            style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, padding: 24, color: "var(--text-muted)", textAlign: "center" }}
+          >
+            <div style={{ fontSize: 14, color: "#dc2626" }}>{translate("workspace.unable")}</div>
+            <div style={{ maxWidth: "min(720px, 100%)", overflowWrap: "anywhere", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+              {initialNavigation.requestedCwd}
+            </div>
+            <div style={{ maxWidth: 720, fontSize: 12 }}>{initialCwdError}</div>
+          </div>
+        ) : showPlaceholder ? (
+          activeCwd ? (
+            <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontSize: 15 }}>
+              {translate("workspace.selectSession")}
+            </div>
+          ) : (
+            <div style={{ position: "absolute", top: 12, left: 12, display: "flex", alignItems: "flex-start", gap: 8, userSelect: "none", pointerEvents: "none" }}>
+              <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.7, flexShrink: 0 }}>
+                <line x1="20" y1="12" x2="4" y2="12" /><polyline points="10 6 4 12 10 18" />
+              </svg>
+              <div>
+                <div style={{ fontSize: 18, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>{translate("workspace.getStarted")}</div>
+                <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.8 }}>
+                  <span style={{ color: "var(--text-dim)", marginRight: 6 }}>1.</span>{translate("workspace.selectProject")}<br />
+                  <span style={{ color: "var(--text-dim)", marginRight: 6 }}>2.</span>{translate("workspace.addModels")}
+                </div>
+              </div>
+            </div>
+          )
+        ) : null}
+      </div>
+    </div>
+  );
 
   return (
     <>
@@ -1823,7 +2124,6 @@ export function AppShell() {
             <>
               {renderProjectTrustWarning(false)}
               {renderSessionToolsButton()}
-              {renderSessionStatsButton(false)}
             </>
           )}
           {!isMobile && renderMainFileToggle(false)}
@@ -1850,35 +2150,6 @@ export function AppShell() {
               overflowY: "auto",
               zIndex: 500,
             }}>
-              {activeTopPanel === "system" && (
-                <div style={{
-                  background: "var(--bg-panel)",
-                  borderBottom: "1px solid var(--border)",
-                }}>
-                  {systemPrompt ? (
-                    <div style={{
-                      maxHeight: "min(600px, 75vh)",
-                      overflowY: "auto",
-                      padding: "12px 16px",
-                      color: "var(--text-muted)",
-                      fontSize: 12,
-                      lineHeight: 1.6,
-                      whiteSpace: "pre-wrap",
-                      fontFamily: "var(--font-mono)",
-                    }}>
-                      {systemPrompt}
-                    </div>
-                  ) : systemPrompt === "" ? (
-                    <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
-                       {translate("system.empty")}
-                    </div>
-                  ) : (
-                    <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
-                       {systemPromptLoading ? translate("system.loading") : translate("system.load")}
-                    </div>
-                  )}
-                </div>
-              )}
               {activeTopPanel === "session" && (
                 <div className="session-info-popover" style={{
                   background: "var(--bg-panel)",
@@ -2056,75 +2327,8 @@ export function AppShell() {
         {isMobile && renderProjectTrustWarning(true)}
         </div>
 
-        {/* Chat content */}
-        <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
-          {showChat ? (
-            <ChatWindow
-              key={sessionKey}
-              session={selectedSession}
-              sessionRunning={Boolean(selectedSession && runningSessionIds.has(selectedSession.id))}
-              newSessionCwd={effectiveNewSessionCwd}
-              newSessionDraftKey={newSessionDraftKey}
-              onAgentEnd={handleAgentEnd}
-              onAttentionNeeded={handleAttentionNeeded}
-              onSessionCreated={handleSessionCreated}
-              onSessionForked={handleSessionForked}
-              modelsRefreshKey={modelsRefreshKey}
-              chatInputRef={chatInputRef}
-              onBranchDataChange={handleBranchDataChange}
-              onSystemPromptChange={handleSystemPromptChange}
-              onSystemPromptLoaderChange={handleSystemPromptLoaderChange}
-              onSessionStatsChange={handleSessionStatsChange}
-              onSessionStatsPanelOpen={openSessionStatsPanel}
-              onContextUsageChange={handleContextUsageChange}
-              onOpenFile={handleOpenLinkedFile}
-              soundEnabled={soundEnabled}
-              onSoundToggle={onSoundToggle}
-              playDoneSound={playDoneSound}
-              unlockAudio={unlockAudio}
-            />
-          ) : initialCwdStatus === "validating" ? (
-            <div
-              role="status"
-              style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, padding: 24, color: "var(--text-muted)", textAlign: "center" }}
-            >
-               <div style={{ fontSize: 14, color: "var(--text)" }}>{translate("workspace.opening")}</div>
-              <div style={{ maxWidth: "min(720px, 100%)", overflowWrap: "anywhere", fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                {initialNavigation.requestedCwd}
-              </div>
-            </div>
-          ) : initialCwdStatus === "error" ? (
-            <div
-              role="alert"
-              style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, padding: 24, color: "var(--text-muted)", textAlign: "center" }}
-            >
-               <div style={{ fontSize: 14, color: "#dc2626" }}>{translate("workspace.unable")}</div>
-              <div style={{ maxWidth: "min(720px, 100%)", overflowWrap: "anywhere", fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                {initialNavigation.requestedCwd}
-              </div>
-              <div style={{ maxWidth: 720, fontSize: 12 }}>{initialCwdError}</div>
-            </div>
-          ) : showPlaceholder ? (
-            activeCwd ? (
-              <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontSize: 15 }}>
-                 {translate("workspace.selectSession")}
-              </div>
-            ) : (
-              <div style={{ position: "absolute", top: 12, left: 12, display: "flex", alignItems: "flex-start", gap: 8, userSelect: "none", pointerEvents: "none" }}>
-                <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.7, flexShrink: 0 }}>
-                  <line x1="20" y1="12" x2="4" y2="12" /><polyline points="10 6 4 12 10 18" />
-                </svg>
-                <div>
-                   <div style={{ fontSize: 18, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>{translate("workspace.getStarted")}</div>
-                  <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.8 }}>
-                     <span style={{ color: "var(--text-dim)", marginRight: 6 }}>1.</span>{translate("workspace.selectProject")}<br />
-                     <span style={{ color: "var(--text-dim)", marginRight: 6 }}>2.</span>{translate("workspace.addModels")}
-                  </div>
-                </div>
-              </div>
-            )
-          ) : null}
-        </div>
+        {/* 主栏：编辑器放文件，助手放对话 */}
+        {isEditorLayout ? fileWorkspace : agentWorkspace}
       </div>
 
       <div
@@ -2142,7 +2346,7 @@ export function AppShell() {
         />
       )}
 
-      {/* Right panel: file viewer — always mounted, width animated via CSS */}
+      {/* 辅栏：编辑器放对话，助手放文件。始终挂载以便宽度动画与状态保留。 */}
       <div
         ref={rightPanelResizer.panelRef}
         id="file-panel"
@@ -2155,77 +2359,7 @@ export function AppShell() {
           background: "var(--bg)",
         } as React.CSSProperties}
       >
-        {/* Right panel tab bar */}
-        <div style={{
-          display: "flex",
-          alignItems: "center",
-          flexShrink: 0,
-          height: "calc(36px + env(safe-area-inset-top))",
-          paddingTop: "env(safe-area-inset-top)",
-          background: "var(--bg-panel)",
-          borderBottom: "1px solid var(--border)",
-        }}>
-          <div style={{ flex: 1, overflow: "hidden" }}>
-            <TabBar
-              tabs={fileTabs}
-              activeTabId={activeFileTabId ?? ""}
-              onSelectTab={setActiveFileTabId}
-              onCloseTab={handleCloseFileTab}
-            />
-          </div>
-          <button
-            type="button"
-            onClick={() => setRightPanelOpen(false)}
-            aria-controls="file-panel"
-            aria-expanded={rightPanelOpen}
-            title={translate("files.hidePanel")}
-            aria-label={translate("files.hidePanel")}
-            style={{
-              display: "flex", alignItems: "center", justifyContent: "center",
-              width: TOP_BAR_ICON_BUTTON_SIZE, height: TOP_BAR_ICON_BUTTON_SIZE, padding: 0,
-              background: "var(--bg-selected)", border: "none", borderLeft: "1px solid var(--border)",
-              color: "var(--text)", cursor: "pointer", flexShrink: 0, transition: "color 0.12s",
-            }}
-            onMouseEnter={(event) => { event.currentTarget.style.color = "var(--accent)"; }}
-            onMouseLeave={(event) => { event.currentTarget.style.color = "var(--text)"; }}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <rect x="3" y="3" width="18" height="18" rx="2" /><line x1="15" y1="3" x2="15" y2="21" />
-            </svg>
-          </button>
-        </div>
-
-        {/* Only the active viewer is mounted. Lightweight per-tab state is restored on activation. */}
-        <div style={{ flex: 1, overflow: "hidden", paddingBottom: "env(safe-area-inset-bottom)" }}>
-          {activeFileTab?.filePath ? (
-            <FileViewer
-              key={`${activeFileTab.id}:${activeFileTab.viewerRevision ?? 0}`}
-              filePath={activeFileTab.filePath}
-              cwd={activeCwd ?? undefined}
-              sourceSessionId={activeFileTab.sourceSessionId}
-              gitRefreshKey={explorerRefreshKey}
-              initialDisplayMode={activeFileTab.initialDisplayMode}
-              initialState={activeFileTab.viewerState}
-              watchEnabled={rightPanelOpen}
-              onStateChange={(viewerState) => handleFileViewerStateChange(
-                activeFileTab.id,
-                activeFileTab.viewerRevision ?? 0,
-                viewerState,
-              )}
-              onMentionLines={rightPanelOpen ? handleFileLineMention : undefined}
-              onAtMention={handleAtMention}
-              onOpenFile={(filePath) => handleOpenFile(
-                filePath,
-                getFileName(filePath),
-                { sourceSessionId: activeFileTab.sourceSessionId },
-              )}
-            />
-          ) : (
-            <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", fontSize: 12 }}>
-               {translate("files.noneOpen")}
-            </div>
-          )}
-        </div>
+        {isEditorLayout ? agentWorkspace : fileWorkspace}
       </div>
     </div>
     {settingsOpen && (

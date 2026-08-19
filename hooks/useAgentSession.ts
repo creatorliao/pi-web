@@ -146,7 +146,7 @@ export interface UseAgentSessionOptions {
   onBranchDataChange?: (tree: SessionTreeNode[], activeLeafId: string | null, onLeafChange: (leafId: string | null) => void) => void;
   onSystemPromptChange?: (prompt: string | null) => void;
   /** Registers an action that lazily starts the session and returns its system prompt. */
-  onSystemPromptLoaderChange?: (loader: (() => Promise<void>) | null) => void;
+  onSystemPromptLoaderChange?: (loader: (() => Promise<string>) | null) => void;
   onSessionStatsPanelOpen?: () => void;
   setToolPreset?: (preset: ToolPreset) => void;
 }
@@ -634,11 +634,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // or model run, but lets users inspect the exact prompt before sending one.
   const loadSystemPrompt = useCallback(async () => {
     const sid = sessionIdRef.current ?? await ensureNewSession();
-    if (!sid) return;
+    if (!sid) return "";
 
     const state = await sendAgentCommand<AgentStateResponse>(sid, { type: "get_state" });
-    if (!sessionHookMountedRef.current || sessionIdRef.current !== sid) return;
-    setSystemPrompt(state.systemPrompt ?? "");
+    const prompt = state.systemPrompt ?? "";
+    if (!sessionHookMountedRef.current || sessionIdRef.current !== sid) return prompt;
+    setSystemPrompt(prompt);
+    return prompt;
   }, [ensureNewSession]);
 
   const loadSlashCommands = useCallback(async () => {

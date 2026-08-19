@@ -26,6 +26,7 @@ import { FrontmatterCard } from "./FrontmatterCard";
 import { parseUnifiedPatch } from "@/lib/patch";
 import type { GitFileDiffResponse } from "@/lib/git-types";
 import { useI18n } from "@/hooks/useI18n";
+import { isVirtualFilePath } from "@/lib/virtual-files";
 import {
   resolveInitialFileDisplayMode,
   type FileViewerDisplayMode as DisplayMode,
@@ -36,6 +37,8 @@ export type { FileViewerState } from "@/lib/file-viewer-state";
 
 interface Props {
   filePath: string;
+  /** 虚拟文档正文：跳过 /api/files 与文件监视。 */
+  virtualContent?: string;
   cwd?: string;
   sourceSessionId?: string | null;
   onOpenFile?: (filePath: string) => void;
@@ -547,6 +550,7 @@ function ImageViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
         <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />
       </div>
       <div
+        className="file-viewer-content"
         style={{
           flex: 1,
           overflow: "auto",
@@ -921,6 +925,7 @@ function DocumentViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }:
 
 export function FileViewer({
   filePath,
+  virtualContent,
   cwd,
   sourceSessionId,
   onOpenFile,
@@ -932,7 +937,7 @@ export function FileViewer({
   onStateChange,
   watchEnabled = true,
 }: Props) {
-  if (isImagePath(filePath)) {
+  if (!isVirtualFilePath(filePath) && isImagePath(filePath)) {
     return <ImageViewer filePath={filePath} cwd={cwd} sourceSessionId={sourceSessionId} watchEnabled={watchEnabled} />;
   }
   if (isAudioPath(filePath)) {
@@ -944,6 +949,7 @@ export function FileViewer({
   return (
     <TextFileViewer
       filePath={filePath}
+      virtualContent={virtualContent}
       cwd={cwd}
       sourceSessionId={sourceSessionId}
       onOpenFile={onOpenFile}
@@ -960,6 +966,7 @@ export function FileViewer({
 
 function TextFileViewer({
   filePath,
+  virtualContent,
   cwd,
   sourceSessionId,
   onOpenFile,
@@ -1103,6 +1110,19 @@ function TextFileViewer({
     setGitDiffResolved(false);
     setWatching(false);
 
+    if (virtualContent !== undefined) {
+      setData({
+        content: virtualContent,
+        language: "markdown",
+        size: new TextEncoder().encode(virtualContent).length,
+      });
+      setGitDiffResolved(true);
+      setLoading(false);
+      return () => {
+        active = false;
+      };
+    }
+
     fetchContent(filePath).finally(() => {
       if (active) setLoading(false);
     });
@@ -1110,7 +1130,7 @@ function TextFileViewer({
     return () => {
       active = false;
     };
-  }, [filePath, fetchContent, sourceSessionId]);
+  }, [filePath, fetchContent, sourceSessionId, virtualContent]);
 
   useEffect(() => {
     setWatching(false);
@@ -1120,6 +1140,7 @@ function TextFileViewer({
       esRef.current = null;
     }
 
+    if (virtualContent !== undefined) return;
     if (!watchEnabled) return;
 
     const synchronize = () => {
@@ -1149,11 +1170,12 @@ function TextFileViewer({
       es.close();
       if (esRef.current === es) esRef.current = null;
     };
-  }, [filePath, fetchContent, fetchGitDiff, sourceSessionId, watchEnabled]);
+  }, [filePath, fetchContent, fetchGitDiff, sourceSessionId, watchEnabled, virtualContent]);
 
   useEffect(() => {
+    if (virtualContent !== undefined) return;
     void fetchGitDiff(filePath);
-  }, [fetchGitDiff, filePath, gitRefreshKey]);
+  }, [fetchGitDiff, filePath, gitRefreshKey, virtualContent]);
 
   useEffect(() => {
     // HTML gets the same rendered-first treatment as markdown: a generated page
