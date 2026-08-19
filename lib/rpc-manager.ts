@@ -404,7 +404,7 @@ export class AgentSessionWrapper {
    */
   private expandOutgoingPrompt(text: string): string {
     try {
-      const skills = this.inner.resourceLoader.getSkills().skills as ExpandableSkill[];
+      const skills = this.inner.resourceLoader.getSkills().skills as unknown as ExpandableSkill[];
       return expandAllSkillCommands(text, skills);
     } catch (error) {
       console.error(

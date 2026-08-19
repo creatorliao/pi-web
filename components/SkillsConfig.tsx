@@ -10,6 +10,7 @@ import type {
   SkillsResponse,
   SkillUpdateResult,
 } from "@/lib/api-types";
+import { ConfigDialogFrame } from "./ConfigDialogFrame";
 
 function shortenPath(p: string): string {
   // Match common home dir patterns: /Users/xxx, /home/xxx
@@ -709,9 +710,11 @@ function AddSkillPanel({
 export function SkillsConfig({
   cwd,
   onClose,
+  embedded = false,
 }: {
   cwd: string;
   onClose: () => void;
+  embedded?: boolean;
 }) {
   const isMobile = useIsMobile();
   const { t } = useI18n();
@@ -898,35 +901,7 @@ export function SkillsConfig({
   const selectedSkill = skills.find((s) => s.filePath === selected) ?? null;
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 1000,
-        background: "rgba(0,0,0,0.35)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div
-        style={{
-          width: isMobile ? "calc(100vw - 16px)" : 860,
-          maxWidth: "calc(100vw - 16px)",
-          height: isMobile ? "calc(100dvh - 16px)" : "78vh",
-          maxHeight: "calc(100dvh - 16px)",
-          background: "var(--bg)",
-          border: "1px solid var(--border)",
-          borderRadius: 10,
-          display: "flex",
-          flexDirection: "column",
-          boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
-          overflow: "hidden",
-        }}
-      >
+    <ConfigDialogFrame embedded={embedded} onClose={onClose}>
         {/* Header */}
         <div
           style={{
@@ -939,11 +914,13 @@ export function SkillsConfig({
           }}
         >
           <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+            {!embedded && (
             <span
               style={{ fontSize: 15, fontWeight: 700, color: "var(--text)" }}
             >
                {t("common.skills")}
             </span>
+            )}
             <code
               style={{
                 fontSize: 11,
@@ -958,6 +935,7 @@ export function SkillsConfig({
               {shortenPath(cwd)}
             </code>
           </div>
+          {!embedded && (
           <button
             onClick={onClose}
             style={{
@@ -972,6 +950,7 @@ export function SkillsConfig({
           >
             ×
           </button>
+          )}
         </div>
 
         {!projectResourcesLoaded && (
@@ -1379,6 +1358,7 @@ export function SkillsConfig({
               </span>
             )}
           </div>
+          {!embedded && (
           <button
             onClick={onClose}
             style={{
@@ -1393,8 +1373,8 @@ export function SkillsConfig({
           >
              {t("i18n.close")}
           </button>
+          )}
         </div>
-      </div>
-    </div>
+    </ConfigDialogFrame>
   );
 }

@@ -5,6 +5,7 @@ import { sendAgentCommand } from "@/lib/agent-client";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import type { PluginPackageInfo, PluginsResponse } from "@/lib/api-types";
 import { useI18n } from "@/hooks/useI18n";
+import { ConfigDialogFrame } from "./ConfigDialogFrame";
 
 type PluginScope = PluginPackageInfo["scope"];
 type PluginAction = "install" | "remove" | "update" | "disable" | "enable";
@@ -617,11 +618,13 @@ export function PluginsConfig({
   sessionId,
   onClose,
   onReloaded,
+  embedded = false,
 }: {
   cwd: string;
   sessionId: string | null;
   onClose: () => void;
   onReloaded?: () => void;
+  embedded?: boolean;
 }) {
   const isMobile = useIsMobile();
   const { t } = useI18n();
@@ -753,35 +756,7 @@ export function PluginsConfig({
   const addBusy = busyKey?.startsWith("install:") ?? false;
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 1000,
-        background: "rgba(0,0,0,0.35)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div
-        style={{
-          width: isMobile ? "calc(100vw - 16px)" : 860,
-          maxWidth: "calc(100vw - 16px)",
-          height: isMobile ? "calc(100dvh - 16px)" : "76vh",
-          maxHeight: "calc(100dvh - 16px)",
-          background: "var(--bg)",
-          border: "1px solid var(--border)",
-          borderRadius: 8,
-          display: "flex",
-          flexDirection: "column",
-          boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
-          overflow: "hidden",
-        }}
-      >
+    <ConfigDialogFrame embedded={embedded} onClose={onClose}>
         <div
           style={{
             display: "flex",
@@ -793,9 +768,11 @@ export function PluginsConfig({
           }}
         >
           <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
+            {!embedded && (
             <span style={{ fontSize: 15, fontWeight: 700, color: "var(--text)" }}>
               {t("common.plugins")}
             </span>
+            )}
             <code
               style={{
                 fontSize: 11,
@@ -809,6 +786,7 @@ export function PluginsConfig({
               {shortenPath(cwd)}
             </code>
           </div>
+          {!embedded && (
           <button
             onClick={onClose}
             style={{
@@ -823,6 +801,7 @@ export function PluginsConfig({
           >
             ×
           </button>
+          )}
         </div>
 
         {!projectResourcesLoaded && (
@@ -1081,11 +1060,12 @@ export function PluginsConfig({
           <button onClick={() => void loadPlugins()} disabled={loading || busyKey !== null} style={buttonStyle(loading || busyKey !== null)}>
              {t("i18n.refresh")}
           </button>
+          {!embedded && (
           <button onClick={onClose} style={buttonStyle(false)}>
              {t("i18n.close")}
           </button>
+          )}
         </div>
-      </div>
-    </div>
+    </ConfigDialogFrame>
   );
 }

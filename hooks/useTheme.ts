@@ -116,59 +116,73 @@ function nextPreference(preference: ThemePreference): ThemePreference {
   return PREFERENCE_CYCLE[(index + 1) % PREFERENCE_CYCLE.length];
 }
 
+/**
+ * 应用主题偏好；有 View Transition 时从 origin 做圆形扩散。
+ * 设置页三选一与顶栏旧循环开关共用，避免两套动画。
+ */
+function applyThemePreference(nextPref: ThemePreference, origin?: ToggleOrigin): void {
+  const current = ensureState();
+  if (current.preference === nextPref) return;
+  const nextTheme = resolveTheme(nextPref);
+
+  const apply = () => {
+    setThemeState(nextPref, nextTheme, true);
+  };
+
+  const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  const supportsVT = typeof document.startViewTransition === "function";
+
+  if (!supportsVT || reduceMotion) {
+    apply();
+    return;
+  }
+
+  const x = origin?.x ?? window.innerWidth / 2;
+  const y = origin?.y ?? window.innerHeight / 2;
+  const endRadius = Math.hypot(
+    Math.max(x, window.innerWidth - x),
+    Math.max(y, window.innerHeight - y),
+  );
+
+  const transition = document.startViewTransition(apply);
+  transition.ready
+    .then(() => {
+      document.documentElement.animate(
+        {
+          clipPath: [
+            `circle(0px at ${x}px ${y}px)`,
+            `circle(${endRadius}px at ${x}px ${y}px)`,
+          ],
+        },
+        {
+          duration: 450,
+          easing: "cubic-bezier(0.22, 0.61, 0.36, 1)",
+          pseudoElement: "::view-transition-new(root)",
+        },
+      );
+    })
+    .catch(() => {
+      // 过渡被取消时忽略
+    });
+}
+
 export function useTheme() {
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 
   const toggleTheme = useCallback((origin?: ToggleOrigin) => {
-    const current = ensureState();
-    const nextPref = nextPreference(current.preference);
-    const nextTheme = resolveTheme(nextPref);
+    applyThemePreference(nextPreference(ensureState().preference), origin);
+  }, []);
 
-    const apply = () => {
-      setThemeState(nextPref, nextTheme, true);
-    };
-
-    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    const supportsVT = typeof document.startViewTransition === "function";
-
-    if (!supportsVT || reduceMotion) {
-      apply();
-      return;
-    }
-
-    const x = origin?.x ?? window.innerWidth / 2;
-    const y = origin?.y ?? window.innerHeight / 2;
-    const endRadius = Math.hypot(
-      Math.max(x, window.innerWidth - x),
-      Math.max(y, window.innerHeight - y),
-    );
-
-    const transition = document.startViewTransition(apply);
-    transition.ready
-      .then(() => {
-        document.documentElement.animate(
-          {
-            clipPath: [
-              `circle(0px at ${x}px ${y}px)`,
-              `circle(${endRadius}px at ${x}px ${y}px)`,
-            ],
-          },
-          {
-            duration: 450,
-            easing: "cubic-bezier(0.22, 0.61, 0.36, 1)",
-            pseudoElement: "::view-transition-new(root)",
-          },
-        );
-      })
-      .catch(() => {
-        // transition cancelled — ignore
-      });
+  /** 设置页显式选择浅色 / 深色 / 跟随系统，不再循环猜测下一态。 */
+  const setThemePreference = useCallback((preference: ThemePreference, origin?: ToggleOrigin) => {
+    applyThemePreference(preference, origin);
   }, []);
 
   return {
     theme: snapshot.theme,
     preference: snapshot.preference,
     toggleTheme,
+    setThemePreference,
     isDark: snapshot.theme === "dark",
   };
 }
