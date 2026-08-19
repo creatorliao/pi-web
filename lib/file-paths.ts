@@ -38,6 +38,25 @@ export function getRelativeFilePath(filePath: string, cwd?: string): string {
   return filePath;
 }
 
+function isAbsoluteFilePath(filePath: string): boolean {
+  const normalized = normalizeFilePathSlashes(filePath);
+  if (normalized.startsWith("/") || normalized.startsWith("//")) return true;
+  if (/^[a-zA-Z]:\//.test(normalized)) return true;
+  if (normalized.startsWith("pi-virtual://")) return true;
+  return false;
+}
+
+/**
+ * 细栏用的完整路径：虚拟文档保留 URI，磁盘文件给出绝对路径。
+ * 不再相对化到 cwd——根目录文件相对化后只剩文件名，和页签重复。
+ */
+export function getStatusBarFilePath(filePath: string, cwd?: string): string {
+  const normalized = normalizeFilePathSlashes(filePath);
+  if (isAbsoluteFilePath(normalized)) return normalized;
+  if (cwd) return normalizeFilePathSlashes(joinFilePath(cwd, normalized));
+  return normalized;
+}
+
 export function joinFilePath(parent: string, child: string): string {
   return `${normalizeFilePathSlashes(parent).replace(/\/$/, "")}/${child}`;
 }

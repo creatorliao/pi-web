@@ -81,6 +81,7 @@ lib/
   tool-presets.ts     PRESET_NONE/READ_ONLY/DEFAULT/FULL + getPresetFromTools()
   tool-preset-preference.ts  browser-persisted default for fresh sessions
   types.ts            shared TypeScript types
+  toast.ts            ToastTone / 默认时长 / resolveToastDuration
   normalize.ts        normalizeToolCalls() — field name mismatch between file format and our types
   worktree.ts         project/worktree resolution and git worktree operations
 
@@ -91,6 +92,7 @@ components/
   ChatInput.tsx       input bar + model/thinking/tools/compact controls
   MessageView.tsx     renders one message (user/assistant/toolCall/toolResult)
   BranchNavigator.tsx in-session branch switcher
+  ToastHost.tsx       统一短暂提示层（底部居中）
   ChatMinimap.tsx     scroll minimap alongside the message list
   MarkdownBody.tsx    markdown renderer
   ModelsConfig.tsx    modal for editing models.json (opened from sidebar bottom)
@@ -104,6 +106,7 @@ components/
 hooks/
   useAgentSession.ts  messages + streaming + SSE + fork/navigate/reconciliation logic
   useAudio.ts         completion sound + browser AudioContext unlock
+  useToast.tsx        ToastProvider + showToast
   useDragDrop.ts      shared drag/drop state
   useIsMobile.ts      responsive breakpoint hook
   useTheme.ts         theme state
@@ -219,6 +222,21 @@ Location: `~/.pi/agent/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl`
 
 ---
 
+## 文档留痕（本仓铁律，先于改代码）
+
+**文档留痕是第一要义。** 用户给出的需求、方案、分析报告，必须**主动**落到 `docs/01-Projects` 的**主题文件夹**，不能只停在对话里、也不能摊到 `02-Areas`。
+
+| 铁律 | 做法 |
+|------|------|
+| 主动落盘 | 用户未点名「写文档」也要记；与实现同轮完成，禁止做完不留痕 |
+| 按主题存 | 需求、方案、分析、改善报告一律进主题夹，一篇一事、夹内接序号 |
+| 同主题不新开夹 | 落盘前先列 `docs/01-Projects/`；语义相同或从属已有专题则**只追加**，禁止因「新的一天 / 新会话」再 `cp` 平行夹 |
+| 拿不准 | 选最贴的已有夹追加，而不是新建 |
+
+细则与判断表见 [docs/02-Areas/20260819-03-最佳实践_主题夹文档留痕.md](docs/02-Areas/20260819-03-最佳实践_主题夹文档留痕.md)。
+
+---
+
 <!-- BEGIN:para-structure-agents -->
 
 ## docs / PARA 落盘约定
@@ -262,7 +280,11 @@ R{YYYYMMDD}-xx-主题
 
 ### 本仓对照（锚点外，doctor 不覆盖）
 
-PARA 根是 `docs/`。领域笔记示例：`docs/02-Areas/20260819-01-pi-web与本机pi内核关系.md`。专题夹示例：`docs/01-Projects/R20260819-03-界面Cursor化布局/`、`R20260819-09-历史与系统提示进文件区/`。只说「写需求/方案」而未点名 CLI 时，也可手建同名 `R{YYYYMMDD}-xx-主题` 夹。需求/方案按子主题进 `01-Projects`，不要写成 `02-Areas/YYYYMMDD-xx-主题-需求.md`。
+PARA 根是 `docs/`。领域笔记（无交付闭环）才用 Areas 扁平文件，例如 `docs/02-Areas/20260819-01-pi-web与本机pi内核关系.md`。
+
+专题只认主题夹：`R20260819-03-界面Cursor化布局/` 后续顶栏、对话入口仍追加在该夹（`05`～`08`），不要另开 `R…-对话顶栏`。新开夹仅当主题确实独立（如 `R20260819-10-文件区滚动与提示词分区`）。只说「写需求/方案」也可手建同名 `R{YYYYMMDD}-xx-主题` 夹，但须先确认没有同主题夹。
+
+留痕操作顺序与正反例见 [20260819-03-最佳实践_主题夹文档留痕.md](docs/02-Areas/20260819-03-最佳实践_主题夹文档留痕.md)。
 
 <!-- BEGIN:nextjs-agent-rules -->
 

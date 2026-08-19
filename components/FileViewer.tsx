@@ -17,7 +17,7 @@ import {
   isDocumentPreviewPath,
   isImagePath,
 } from "@/lib/file-types";
-import { encodeFilePathForApi, getFileDirectory, getFileName, getRelativeFilePath } from "@/lib/file-paths";
+import { encodeFilePathForApi, getFileDirectory, getFileName, getRelativeFilePath, getStatusBarFilePath } from "@/lib/file-paths";
 import { resolveLocalFileHref } from "@/lib/file-links";
 import { parseFrontmatter } from "@/lib/frontmatter";
 import { markdownPreviewRehypePlugins, markdownPreviewRemarkPlugins, normalizeDisplayMath } from "@/lib/markdown";
@@ -427,7 +427,37 @@ function DiffView({ patch }: { patch: string }) {
 }
 
 /**
- * 贴在页签正下方的细状态栏（不是窗口底栏）：页签只导航，这里放原文档/预览和审阅操作。
+ * 细栏左侧：完整路径（磁盘绝对路径 / 虚拟 URI）。
+ * 不用相对路径——cwd 根下的文件会只剩文件名，和页签重复。
+ */
+function FilePathStatusMeta({
+  filePath,
+  cwd,
+  generated = false,
+  extras,
+}: {
+  filePath: string;
+  cwd?: string;
+  generated?: boolean;
+  extras?: ReactNode;
+}) {
+  const { t } = useI18n();
+  const displayPath = getStatusBarFilePath(filePath, cwd);
+  return (
+    <>
+      <span className="file-viewer-statusbar-path" title={displayPath}>
+        <span>{displayPath}</span>
+      </span>
+      {generated && (
+        <span className="file-viewer-statusbar-generated">{t("files.docGenerated")}</span>
+      )}
+      {extras}
+    </>
+  );
+}
+
+/**
+ * 贴在页签正下方的细状态栏（不是窗口底栏）：页签只导航，这里放路径和审阅操作。
  * 刻意 24px、弱化色，避免再做成第二条 36px 标题。
  */
 function FileViewerStatusBar({
@@ -454,8 +484,6 @@ function ImageViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
   const [error, setError] = useState<string | null>(null);
   const esRef = useRef<EventSource | null>(null);
   const syncRequestRef = useRef(0);
-
-  const ext = getFileName(filePath).toLowerCase().split(".").pop() ?? "";
 
   useEffect(() => {
     setBust(0);
@@ -534,13 +562,16 @@ function ImageViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
       <FileViewerStatusBar
         meta={(
-          <>
-            <span title={getRelativeFilePath(filePath, cwd)}>{t("files.docOnDisk")}</span>
-            <span>{t("files.docOriginal")}</span>
-            <span>{ext || "image"}</span>
-            {naturalSize && <span>{naturalSize.w} × {naturalSize.h}</span>}
-            {formatSizeStr && <span>{formatSizeStr}</span>}
-          </>
+          <FilePathStatusMeta
+            filePath={filePath}
+            cwd={cwd}
+            extras={(
+              <>
+                {naturalSize && <span>{naturalSize.w} × {naturalSize.h}</span>}
+                {formatSizeStr && <span>{formatSizeStr}</span>}
+              </>
+            )}
+          />
         )}
       >
         <span
@@ -613,8 +644,6 @@ function AudioViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
   const [error, setError] = useState<string | null>(null);
   const esRef = useRef<EventSource | null>(null);
   const syncRequestRef = useRef(0);
-
-  const ext = getFileName(filePath).toLowerCase().split(".").pop() ?? "";
 
   useEffect(() => {
     setBust(0);
@@ -691,13 +720,16 @@ function AudioViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
       <FileViewerStatusBar
         meta={(
-          <>
-            <span title={getRelativeFilePath(filePath, cwd)}>{t("files.docOnDisk")}</span>
-            <span>{t("files.docOriginal")}</span>
-            <span>{ext || "audio"}</span>
-            {duration != null && <span>{formatDuration(duration)}</span>}
-            {size != null && <span>{formatSize(size)}</span>}
-          </>
+          <FilePathStatusMeta
+            filePath={filePath}
+            cwd={cwd}
+            extras={(
+              <>
+                {duration != null && <span>{formatDuration(duration)}</span>}
+                {size != null && <span>{formatSize(size)}</span>}
+              </>
+            )}
+          />
         )}
       >
         <span
@@ -861,12 +893,11 @@ function DocumentViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }:
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
       <FileViewerStatusBar
         meta={(
-          <>
-            <span title={getRelativeFilePath(filePath, cwd)}>{t("files.docOnDisk")}</span>
-            <span>{t("files.docPreview")}</span>
-            <span>{ext === "docx" ? "docx" : "pdf"}</span>
-            {size != null && <span>{formatSize(size)}</span>}
-          </>
+          <FilePathStatusMeta
+            filePath={filePath}
+            cwd={cwd}
+            extras={size != null ? <span>{formatSize(size)}</span> : null}
+          />
         )}
       >
         <span
@@ -1285,14 +1316,8 @@ function TextFileViewer({
         ...(hasPreview ? ["preview" as const] : []),
         ...(hasGitDiff ? ["diff" as const] : []),
       ];
-  // 文件名只出现在页签上；审阅操作和「是否原文档」放底部细栏。
+  // 文件名只出现在页签上；细栏左侧写路径，审阅操作仍在右侧。
   const isGenerated = virtualContent !== undefined || isVirtualFilePath(filePath);
-  const originLabel = isGenerated ? t("files.docGenerated") : t("files.docOnDisk");
-  const viewLabel = effectiveDisplayMode === "preview"
-    ? t("files.docPreview")
-    : effectiveDisplayMode === "diff"
-      ? t("files.docDiff")
-      : t("files.docOriginal");
   const toolbarControls = (
         <div className="file-viewer-controls" data-file-chrome-controls="">
           {!isDeletedDiff && (
@@ -1366,13 +1391,7 @@ function TextFileViewer({
   return (
     <div className="file-viewer-shell" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
       <FileViewerStatusBar
-        meta={(
-          <>
-            <span title={getRelativeFilePath(filePath, cwd)}>{originLabel}</span>
-            <span>{viewLabel}</span>
-            <span>{language}</span>
-          </>
-        )}
+        meta={<FilePathStatusMeta filePath={filePath} cwd={cwd} generated={isGenerated} />}
       >
         {toolbarControls}
       </FileViewerStatusBar>

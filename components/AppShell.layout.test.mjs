@@ -23,7 +23,12 @@ test("session list is portaled into the agent block on desktop only", () => {
 test("desktop chat entry uses a push drawer and tab-bar icons stay off the file tabs", () => {
   assert.match(source, /data-workspace-new-chat=""/);
   assert.match(source, /data-workspace-chat-history=""/);
+  assert.match(source, /data-workspace-chat-title=/);
+  assert.match(source, /data-workspace-session-tools=/);
+  assert.match(source, /data-workspace-new-chat-collapsed=/);
   assert.match(source, /data-agent-chrome=""/);
+  assert.match(source, /data-agent-column=/);
+  assert.match(source, /showHistoryToggle: !agentHistoryOpen/);
   assert.match(source, /data-agent-history-drawer=""/);
   assert.doesNotMatch(source, /data-file-chrome=""/);
   assert.match(source, /data-file-tab-strip=""/);
@@ -42,7 +47,13 @@ test("desktop chat entry uses a push drawer and tab-bar icons stay off the file 
   assert.doesNotMatch(source, /<circle cx="12" cy="12" r="8" \/>/);
   assert.doesNotMatch(source, /<span aria-hidden="true">\+<\/span>/);
   assert.doesNotMatch(source, /\{translate\("chat\.historyList"\)\}/);
+  assert.doesNotMatch(source, /<span>\{translate\("chat\.sessionMenu"\)\}<\/span>/);
   assert.doesNotMatch(source, /chromeHost=\{fileChromeHost\}/);
+});
+
+test("history drawer chrome and collapsed new-chat live in the shell", () => {
+  assert.match(source, /includeCollapse && !rightPanelOpen/);
+  assert.match(source, /startNewConversation/);
 });
 
 test("desktop chat no longer mounts ChatMinimap hover preview", () => {

@@ -99,12 +99,15 @@ function getLabel(entry: SessionEntry): string {
   return entry.type;
 }
 
-// Does the tree have any branching at all?
-function hasBranch(nodes: SessionTreeNode[]): boolean {
+/**
+ * 会话树是否存在可切换的分叉（多根或任一节点有多个子节点）。
+ * 与面板是否渲染内容共用，避免空态下拉与 Toast 判定不一致。
+ */
+export function sessionHasBranches(nodes: SessionTreeNode[]): boolean {
   if (nodes.length > 1) return true;
   for (const node of nodes) {
     if (node.children.length > 1) return true;
-    if (hasBranch(node.children)) return true;
+    if (sessionHasBranches(node.children)) return true;
   }
   return false;
 }
@@ -279,7 +282,7 @@ export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, cont
 
   const noBranchReason = !hasSession
     ? t("i18n.noActiveSession")
-    : !hasBranch(tree)
+    : !sessionHasBranches(tree)
       ? t("i18n.noBranches")
       : null;
 
@@ -333,7 +336,7 @@ export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, cont
           {branchIcon}
            {!compact && <span>{t("i18n.branches")}</span>}
         </button>
-        {open && dropdownPos && (
+        {open && dropdownPos && hasContent && (
           <div style={{
             position: "fixed",
             top: dropdownPos.top,
@@ -343,25 +346,19 @@ export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, cont
             borderBottom: "1px solid var(--border)",
             zIndex: 500,
           }}>
-            {hasContent ? (
-              <div style={{ padding: "4px 12px 8px 12px", maxHeight: 260, overflowY: "auto" }}>
-                {topLevel.map((child, idx) => (
-                  <TreeNodeView
-                    key={child.entry.id}
-                    node={child}
-                    activePathIds={activePathIds}
-                    depth={0}
-                    isLast={idx === topLevel.length - 1}
-                    parentLines={[]}
-                    onSelect={handleSelect}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
-                {noBranchReason}
-              </div>
-            )}
+            <div style={{ padding: "4px 12px 8px 12px", maxHeight: 260, overflowY: "auto" }}>
+              {topLevel.map((child, idx) => (
+                <TreeNodeView
+                  key={child.entry.id}
+                  node={child}
+                  activePathIds={activePathIds}
+                  depth={0}
+                  isLast={idx === topLevel.length - 1}
+                  parentLines={[]}
+                  onSelect={handleSelect}
+                />
+              ))}
+            </div>
           </div>
         )}
       </div>
@@ -392,8 +389,8 @@ export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, cont
         {chevron}
       </button>
 
-      {/* Tree panel - overlay */}
-      {open && (
+      {/* Tree panel - overlay。无分叉时不画空层，由调用方 Toast。 */}
+      {open && hasContent && (
         <div style={{
           position: "absolute",
           top: "100%",
@@ -404,25 +401,19 @@ export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, cont
           boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
           zIndex: 100,
         }}>
-          {hasContent ? (
-            <div style={{ padding: "4px 12px 8px 12px", maxHeight: 260, overflowY: "auto" }}>
-              {topLevel.map((child, idx) => (
-                <TreeNodeView
-                  key={child.entry.id}
-                  node={child}
-                  activePathIds={activePathIds}
-                  depth={0}
-                  isLast={idx === topLevel.length - 1}
-                  parentLines={[]}
-                  onSelect={handleSelect}
-                />
-              ))}
-            </div>
-          ) : (
-            <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
-              {noBranchReason ?? t("i18n.noBranches")}
-            </div>
-          )}
+          <div style={{ padding: "4px 12px 8px 12px", maxHeight: 260, overflowY: "auto" }}>
+            {topLevel.map((child, idx) => (
+              <TreeNodeView
+                key={child.entry.id}
+                node={child}
+                activePathIds={activePathIds}
+                depth={0}
+                isLast={idx === topLevel.length - 1}
+                parentLines={[]}
+                onSelect={handleSelect}
+              />
+            ))}
+          </div>
         </div>
       )}
     </div>

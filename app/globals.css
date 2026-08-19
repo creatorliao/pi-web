@@ -921,9 +921,29 @@ pre, code {
   align-items: center;
   gap: 8px;
   min-width: 0;
+  flex: 1;
   overflow: hidden;
   white-space: nowrap;
+}
+
+/* 长路径保住尾段（文件名），完整路径放 title。 */
+.file-viewer-statusbar-path {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.file-viewer-statusbar-path > span {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+.file-viewer-statusbar-generated {
+  flex-shrink: 0;
+  color: var(--text-dim);
 }
 
 .file-viewer-statusbar-actions {

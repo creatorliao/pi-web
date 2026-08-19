@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect, useLayoutEffect, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { SessionSidebar } from "./SessionSidebar";
@@ -10,8 +11,9 @@ import { TabBar, type Tab } from "./TabBar";
 import { openFileTab, saveFileViewerState } from "./file-tab-state";
 import { SettingsDialog } from "./SettingsDialog";
 import { ProjectTrustDialog } from "./ProjectTrustDialog";
-import { BranchNavigator } from "./BranchNavigator";
+import { BranchNavigator, sessionHasBranches } from "./BranchNavigator";
 import { useI18n } from "@/hooks/useI18n";
+import { useToast } from "@/hooks/useToast";
 import { useLayoutMode } from "@/hooks/useLayoutMode";
 import { useExplorerVisibility } from "@/hooks/useExplorerVisibility";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -20,6 +22,7 @@ import { useResizablePanel } from "@/hooks/useResizablePanel";
 import { useAudio } from "@/hooks/useAudio";
 import { copyText } from "@/lib/clipboard";
 import { getFileName } from "@/lib/file-paths";
+import { skillExpansionsToSidebarTitle } from "@/lib/slash-display";
 import { buildAtMentionText, buildFileAtMentionsText, buildFileLineMentionText } from "@/lib/file-fuzzy";
 import {
   claimExtensionAttentionNotification,
@@ -57,13 +60,10 @@ import type { FileViewerState } from "@/lib/file-viewer-state";
 import { formatSessionHistoryMarkdown } from "@/lib/session-virtual-docs";
 import { formatSystemPromptView } from "@/lib/system-prompt-view";
 import { isVirtualFilePath, virtualDocPath } from "@/lib/virtual-files";
+import { shouldAttemptAutoSessionTitle } from "@/lib/session-auto-title";
 
 type SessionCopyField = "file" | "id";
-type AutoNameStatus =
-  | { kind: "idle" }
-  | { kind: "naming" }
-  | { kind: "success" }
-  | { kind: "error"; message: string };
+type AutoNameStatus = { kind: "idle" } | { kind: "naming" };
 
 const TOP_BAR_ICON_BUTTON_SIZE = 36;
 /** 侧栏窄于此时「设置」只显示齿轮，避免挤掉标签。 */
@@ -74,6 +74,7 @@ export function AppShell() {
   const searchParams = useSearchParams();
   const [initialNavigation] = useState(() => getInitialNavigation(searchParams));
   const { locale, t: translate } = useI18n();
+  const { showToast } = useToast();
   const isMobile = useIsMobile();
   const { layoutMode } = useLayoutMode();
   const { showHiddenFiles } = useExplorerVisibility();
@@ -334,6 +335,7 @@ export function AppShell() {
   const topBarRef = useRef<HTMLDivElement>(null);
   const mobileToolbarRef = useRef<HTMLDivElement>(null);
   const sessionMenuRef = useRef<HTMLDivElement>(null);
+  const sessionMenuPanelRef = useRef<HTMLDivElement>(null);
   const [sessionToolsMenuOpen, setSessionToolsMenuOpen] = useState(false);
 
   // Branch navigator state — populated by ChatWindow via onBranchDataChange
@@ -371,9 +373,16 @@ export function AppShell() {
   const [sessionStats, setSessionStats] = useState<SessionStatsInfo | null>(null);
   const [autoNameStatus, setAutoNameStatus] = useState<AutoNameStatus>({ kind: "idle" });
   const autoNameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoNameSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoNamedSuccessIdsRef = useRef(new Set<string>());
+  const autoNameInFlightRef = useRef<string | null>(null);
+  const selectedSessionRef = useRef<SessionInfo | null>(selectedSession);
+  selectedSessionRef.current = selectedSession;
+  const sessionStatsRef = useRef<SessionStatsInfo | null>(null);
   const activeSessionIdRef = useRef<string | null>(selectedSession?.id ?? null);
   activeSessionIdRef.current = selectedSession?.id ?? null;
   const handleSessionStatsChange = useCallback((stats: SessionStatsInfo | null) => {
+    sessionStatsRef.current = stats;
     setSessionStats(stats);
   }, []);
   const [copiedSessionField, setCopiedSessionField] = useState<SessionCopyField | null>(null);
@@ -390,6 +399,7 @@ export function AppShell() {
     return () => {
       if (sessionCopyTimerRef.current) clearTimeout(sessionCopyTimerRef.current);
       if (autoNameTimerRef.current) clearTimeout(autoNameTimerRef.current);
+      if (autoNameSettleTimerRef.current) clearTimeout(autoNameSettleTimerRef.current);
     };
   }, []);
 
@@ -472,8 +482,11 @@ export function AppShell() {
   useEffect(() => {
     if (!sessionToolsMenuOpen) return;
     const handlePointerDown = (event: PointerEvent) => {
+      const path = event.composedPath();
       const menu = sessionMenuRef.current;
-      if (menu && event.composedPath().includes(menu)) return;
+      const panel = sessionMenuPanelRef.current;
+      if (menu && path.includes(menu)) return;
+      if (panel && path.includes(panel)) return;
       setSessionToolsMenuOpen(false);
     };
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -817,6 +830,25 @@ export function AppShell() {
     router.replace("/", { scroll: false });
   }, [invalidateWorkspaceRestore, router, isMobile]);
 
+  /**
+   * 三处新建共用：对话顶栏 +、历史「新对话」、栏收起时主顶栏 +。
+   * 编辑器下若整栏关着，先打开再进入空会话，避免入口消失。
+   */
+  const startNewConversation = useCallback(() => {
+    const cwd = activeCwd ?? selectedSession?.cwd;
+    if (!cwd) return;
+    if (isEditorLayout) setRightPanelOpen(true);
+    const tempId = typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    handleNewSession(tempId, cwd);
+  }, [activeCwd, handleNewSession, isEditorLayout, selectedSession?.cwd]);
+
+  const toggleHistory = useCallback(() => {
+    if (isEditorLayout) setRightPanelOpen(true);
+    setAgentHistoryOpen((open) => !open);
+  }, [isEditorLayout]);
+
   // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N etc.)
   useGlobalKeyboardShortcuts({
     onNewSession: (cwd: string) => handleNewSession(`kb-${Date.now()}`, cwd),
@@ -828,18 +860,19 @@ export function AppShell() {
   // handleCwdChange relies on. Hydrate it from the session list so switching
   // worktrees right after creating a session doesn't close the chat.
   const hydrateSelectedSession = useCallback((sessionId: string) => {
-    void fetch("/api/sessions", { cache: "no-store" })
+    return fetch("/api/sessions", { cache: "no-store" })
       .then((r) => (r.ok ? (r.json() as Promise<{ sessions: SessionInfo[] }>) : null))
       .then((d) => {
         const full = d?.sessions.find((s) => s.id === sessionId);
-        if (!full) return;
+        if (!full) return null;
         setSelectedSession((prev) => (
           prev?.id === sessionId
             ? { ...prev, ...full, transient: full.transient ?? false }
             : prev
         ));
+        return full;
       })
-      .catch(() => {});
+      .catch(() => null);
   }, []);
 
   // Called by ChatWindow when a new session gets its real id from pi
@@ -888,19 +921,110 @@ export function AppShell() {
     }
   }, [handleSelectSession]);
 
+  const requestSessionTitle = useCallback(async (options: { force?: boolean; silent?: boolean } = {}) => {
+    const force = options.force === true;
+    const silent = options.silent === true;
+    const sessionId = activeSessionIdRef.current;
+    const selected = selectedSessionRef.current;
+    if (!sessionId || !selected) return;
+    if (autoNameInFlightRef.current) return;
+
+    if (!force) {
+      let persistedName = selected.name;
+      let transient = Boolean(selected.transient);
+      const stats = sessionStatsRef.current;
+      let hasMessages = Boolean(
+        (stats?.sessionId === sessionId && (stats.userMessages ?? 0) > 0)
+        || selected.messageCount > 0,
+      );
+      try {
+        const live = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { cache: "no-store" });
+        if (live.ok) {
+          const data = await live.json() as { info?: { name?: string; transient?: boolean; messageCount?: number } };
+          persistedName = data.info?.name;
+          transient = Boolean(data.info?.transient);
+          hasMessages = (data.info?.messageCount ?? 0) > 0 || hasMessages;
+        }
+      } catch {
+        // 实时读取失败时退回壳层快照，门控仍会挡住 transient / 空消息。
+      }
+      if (!shouldAttemptAutoSessionTitle({
+        transient,
+        persistedName,
+        hasMessages,
+        alreadyAutoSucceeded: autoNamedSuccessIdsRef.current.has(sessionId),
+        isBusy: autoNameInFlightRef.current !== null || autoNameStatus.kind === "naming",
+      })) {
+        return;
+      }
+    } else if (selected.transient || autoNameStatus.kind === "naming") {
+      return;
+    }
+
+    autoNameInFlightRef.current = sessionId;
+    if (autoNameTimerRef.current) clearTimeout(autoNameTimerRef.current);
+    if (!silent) {
+      setActiveTopPanel(null);
+      showToast({ message: translate("title.generating"), tone: "info" });
+    }
+    setAutoNameStatus({ kind: "naming" });
+
+    try {
+      const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/auto-name`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force }),
+      });
+      const body = (await response.json().catch(() => ({}))) as { title?: string; error?: string };
+      if (!response.ok || !body.title) {
+        throw new Error(body.error || `HTTP ${response.status}`);
+      }
+
+      const title = body.title.trim();
+      setRefreshKey((key) => key + 1);
+      if (activeSessionIdRef.current !== sessionId) return;
+      setSelectedSession((current) => current?.id === sessionId ? { ...current, name: title } : current);
+      setSessionStats((current) => current?.sessionId === sessionId ? { ...current, sessionName: title } : current);
+      if (!force) autoNamedSuccessIdsRef.current.add(sessionId);
+      setAutoNameStatus({ kind: "idle" });
+      if (!silent) showToast({ message: translate("title.updated"), tone: "success" });
+    } catch (error) {
+      if (activeSessionIdRef.current !== sessionId) return;
+      if (silent) {
+        console.warn("Automatic session title failed:", error);
+        setAutoNameStatus({ kind: "idle" });
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      setAutoNameStatus({ kind: "idle" });
+      showToast({ message: message || translate("title.failed"), tone: "error" });
+    } finally {
+      if (autoNameInFlightRef.current === sessionId) autoNameInFlightRef.current = null;
+    }
+  }, [autoNameStatus.kind, showToast, translate]);
+
   const handleAgentEnd = useCallback(() => {
     setRefreshKey((k) => k + 1);
     setExplorerRefreshKey((k) => k + 1);
-    if (selectedSession) hydrateSelectedSession(selectedSession.id);
+    const sessionId = activeSessionIdRef.current;
+    if (sessionId) {
+      void hydrateSelectedSession(sessionId).finally(() => {
+        if (autoNameSettleTimerRef.current) clearTimeout(autoNameSettleTimerRef.current);
+        // prompt_done 与 agent_settled 可能连续触发，合并成一次自动命名。
+        autoNameSettleTimerRef.current = setTimeout(() => {
+          void requestSessionTitle({ silent: true });
+        }, 400);
+      });
+    }
 
     if (!shouldShowBrowserNotification()) return;
-    const targetSession = selectedSession;
+    const targetSession = selectedSessionRef.current;
     deliverSessionNotification({
       targetSession,
       title: targetSession?.name ?? translate("i18n.sessionComplete"),
       body: translate("i18n.taskFinished"),
     });
-  }, [deliverSessionNotification, hydrateSelectedSession, selectedSession, translate]);
+  }, [deliverSessionNotification, hydrateSelectedSession, requestSessionTitle, translate]);
 
   const handleAttentionNeeded = useCallback((request: BlockingExtensionUiRequest) => {
     if (!shouldShowBrowserNotification()) return;
@@ -916,36 +1040,23 @@ export function AppShell() {
     });
   }, [deliverSessionNotification, selectedSession, translate]);
 
-  const handleAutoName = useCallback(async () => {
-    const sessionId = selectedSession?.id;
-    if (!sessionId || autoNameStatus.kind === "naming") return;
-    if (autoNameTimerRef.current) clearTimeout(autoNameTimerRef.current);
-    setActiveTopPanel(null);
-    setAutoNameStatus({ kind: "naming" });
-
-    try {
-      const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/auto-name`, {
-        method: "POST",
-      });
-      const body = (await response.json().catch(() => ({}))) as { title?: string; error?: string };
-      if (!response.ok || !body.title) {
-        throw new Error(body.error || `HTTP ${response.status}`);
-      }
-
-      const title = body.title.trim();
-      setRefreshKey((key) => key + 1);
-      if (activeSessionIdRef.current !== sessionId) return;
-      setSelectedSession((current) => current?.id === sessionId ? { ...current, name: title } : current);
-      setSessionStats((current) => current?.sessionId === sessionId ? { ...current, sessionName: title } : current);
-      setAutoNameStatus({ kind: "success" });
-      autoNameTimerRef.current = setTimeout(() => setAutoNameStatus({ kind: "idle" }), 1800);
-    } catch (error) {
-      if (activeSessionIdRef.current !== sessionId) return;
-      const message = error instanceof Error ? error.message : String(error);
-      setAutoNameStatus({ kind: "error", message });
-      autoNameTimerRef.current = setTimeout(() => setAutoNameStatus({ kind: "idle" }), 5000);
+  const handleAutoName = useCallback(() => {
+    const selected = selectedSessionRef.current;
+    if (!selected || selected.transient) {
+      showToast({ message: translate("title.unsaved"), tone: "info" });
+      return;
     }
-  }, [autoNameStatus.kind, selectedSession?.id]);
+    const stats = sessionStatsRef.current;
+    const hasMessages = Boolean(
+      (stats?.sessionId === selected.id && (stats.userMessages ?? 0) > 0)
+      || selected.messageCount > 0,
+    );
+    if (!hasMessages) {
+      showToast({ message: translate("title.noMessages"), tone: "info" });
+      return;
+    }
+    void requestSessionTitle({ force: true });
+  }, [requestSessionTitle, showToast, translate]);
 
   useEffect(() => {
     if (autoNameTimerRef.current) clearTimeout(autoNameTimerRef.current);
@@ -1087,6 +1198,27 @@ export function AppShell() {
     activeNewSessionDraftKeyRef.current = newSessionDraftKey;
   }, [newSessionDraftKey]);
   const showChat = selectedSession !== null || effectiveNewSessionCwd !== null;
+
+  /**
+   * 打开分支面板；无活动会话或无线分叉时只 Toast，不画空下拉。
+   * 已打开时再点一次则关闭。
+   */
+  const handleBranchesAction = useCallback((keepMobileToolbarOpen = false) => {
+    if (activeTopPanel === "branches") {
+      toggleTopPanel("branches", keepMobileToolbarOpen);
+      return;
+    }
+    if (!showChat) {
+      showToast({ message: translate("i18n.noActiveSession"), tone: "info" });
+      return;
+    }
+    if (!sessionHasBranches(branchTree)) {
+      showToast({ message: translate("i18n.noBranches"), tone: "info" });
+      return;
+    }
+    toggleTopPanel("branches", keepMobileToolbarOpen);
+  }, [activeTopPanel, branchTree, showChat, showToast, toggleTopPanel, translate]);
+
   const projectTrustCwd = selectedSession?.cwd ?? effectiveNewSessionCwd;
   // While restoring initial session from URL, don't show the placeholder
   const showPlaceholder = initialSessionRestored && !showChat;
@@ -1172,6 +1304,7 @@ export function AppShell() {
         onBackgroundTaskDone={handleBackgroundTaskDone}
         onRunningSessionIdsChange={handleRunningSessionIdsChange}
         sessionListPortalTarget={isMobile ? null : sessionListHost}
+        onToggleHistory={!isMobile ? toggleHistory : undefined}
         showHiddenFiles={showHiddenFiles}
       />
       <div style={{ padding: "8px", flexShrink: 0 }}>
@@ -1344,23 +1477,13 @@ export function AppShell() {
             selectedSession
             && ((sessionStats?.userMessages ?? 0) > 0 || selectedSession.messageCount > 0),
           );
-          const disabled = !selectedSession || selectedSession.transient || !hasMessages || autoNameStatus.kind === "naming";
-          const isSuccess = autoNameStatus.kind === "success";
-          const isError = autoNameStatus.kind === "error";
-          const label = autoNameStatus.kind === "naming"
-            ? translate("title.generating")
-            : isSuccess
-              ? translate("title.updated")
-              : isError
-                ? translate("title.failed")
-                : translate("title.generate");
+          const naming = autoNameStatus.kind === "naming";
+          const label = translate("title.generate");
           const title = !selectedSession || selectedSession.transient
             ? translate("title.unsaved")
             : !hasMessages
               ? translate("title.noMessages")
-              : isError
-                ? autoNameStatus.message
-                : translate("title.generateSession");
+              : translate("title.generateSession");
 
           return (
             <button
@@ -1369,7 +1492,7 @@ export function AppShell() {
                 void handleAutoName();
                 if (mobile) setMobileToolbarMoreOpen(true);
               }}
-              disabled={disabled}
+              disabled={naming}
               title={title}
               aria-label={label}
               style={{
@@ -1379,31 +1502,27 @@ export function AppShell() {
                 background: "none", border: "none",
                 borderTop: "2px solid transparent",
                 borderRight: "1px solid var(--border)",
-                color: isError ? "#dc2626" : isSuccess ? "var(--accent)" : disabled ? "var(--text-dim)" : "var(--text-muted)",
-                cursor: disabled ? "not-allowed" : "pointer",
-                opacity: disabled && autoNameStatus.kind !== "naming" ? 0.45 : 1,
+                color: naming ? "var(--text-dim)" : "var(--text-muted)",
+                cursor: naming ? "not-allowed" : "pointer",
+                opacity: naming ? 0.7 : 1,
                 flexShrink: 0, fontSize: 11, whiteSpace: "nowrap",
                 transition: "color 0.1s, background 0.1s, opacity 0.1s",
               }}
               onMouseEnter={(event) => {
-                if (disabled) return;
-                event.currentTarget.style.color = isError ? "#dc2626" : "var(--text)";
+                if (naming) return;
+                event.currentTarget.style.color = "var(--text)";
                 event.currentTarget.style.background = "var(--bg-hover)";
               }}
               onMouseLeave={(event) => {
-                event.currentTarget.style.color = isError ? "#dc2626" : isSuccess ? "var(--accent)" : disabled ? "var(--text-dim)" : "var(--text-muted)";
+                event.currentTarget.style.color = naming ? "var(--text-dim)" : "var(--text-muted)";
                 event.currentTarget.style.background = "none";
               }}
               data-mobile-toolbar-action={mobile ? "name" : undefined}
             >
-              {autoNameStatus.kind === "naming" ? (
+              {naming ? (
                 <svg className="animate-spin" width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                   <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" opacity="0.25" />
                   <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                </svg>
-              ) : isSuccess ? (
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <polyline points="20 6 9 17 4 12" />
                 </svg>
               ) : (
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -1419,7 +1538,7 @@ export function AppShell() {
         {mobile ? (
           <button
             type="button"
-            onClick={() => toggleTopPanel("branches", true)}
+            onClick={() => handleBranchesAction(true)}
             title={translate("i18n.branches")}
             aria-label={translate("i18n.branches")}
             aria-pressed={activeTopPanel === "branches"}
@@ -1450,7 +1569,7 @@ export function AppShell() {
             inline
             containerRef={topBarRef}
             open={activeTopPanel === "branches"}
-            onToggle={() => toggleTopPanel("branches")}
+            onToggle={() => handleBranchesAction()}
             hasSession
           />
         )}
@@ -1495,17 +1614,13 @@ export function AppShell() {
   };
 
   /**
-   * 桌面顶栏「会话」溢出：完整历史 / 生成标题 / 分支 / 系统。
-   * 这些是当前对话工具，不进设置页。
+   * 当前对话溢出菜单：完整历史 / 生成标题 / 分支 / 系统。
+   * 挂在对话顶栏 ⋯ 上，不再占用文件页签行。
    */
-  const renderSessionToolsButton = () => {
+  const renderSessionToolsButton = (iconButtonStyle: (active: boolean, enabled: boolean) => CSSProperties) => {
     if (!showChat) return null;
 
-    const hasMessages = Boolean(
-      selectedSession
-      && ((sessionStats?.userMessages ?? 0) > 0 || selectedSession.messageCount > 0),
-    );
-    const nameDisabled = !selectedSession || selectedSession.transient || !hasMessages || autoNameStatus.kind === "naming";
+    const nameDisabled = autoNameStatus.kind === "naming";
     const menuItems: Array<{
       key: string;
       label: string;
@@ -1520,20 +1635,14 @@ export function AppShell() {
       },
       {
         key: "title",
-        label: autoNameStatus.kind === "naming"
-          ? translate("title.generating")
-          : autoNameStatus.kind === "success"
-            ? translate("title.updated")
-            : autoNameStatus.kind === "error"
-              ? translate("title.failed")
-              : translate("title.generate"),
+        label: translate("title.generate"),
         disabled: nameDisabled,
         onSelect: () => { void handleAutoName(); },
       },
       {
         key: "branches",
         label: translate("i18n.branches"),
-        onSelect: () => toggleTopPanel("branches"),
+        onSelect: () => handleBranchesAction(),
       },
       {
         key: "system",
@@ -1547,50 +1656,37 @@ export function AppShell() {
       <div ref={sessionMenuRef} style={{ position: "relative", height: "100%", display: "flex", alignItems: "stretch" }}>
         <button
           type="button"
+          data-workspace-session-tools=""
           onClick={() => {
             setActiveTopPanel(null);
             setSessionToolsMenuOpen((open) => !open);
           }}
-          title={translate("chat.sessionMenu")}
-          aria-label={translate("chat.sessionMenu")}
+          title={translate("chat.sessionActions")}
+          aria-label={translate("chat.sessionActions")}
           aria-haspopup="menu"
           aria-expanded={sessionToolsMenuOpen}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 6,
-            height: "100%",
-            padding: "0 12px",
-            background: sessionToolsMenuOpen ? "var(--bg-selected)" : "none",
-            border: "none",
-            borderTop: sessionToolsMenuOpen ? "2px solid var(--accent)" : "2px solid transparent",
-            borderRight: "1px solid var(--border)",
-            color: sessionToolsMenuOpen ? "var(--text)" : "var(--text-muted)",
-            cursor: "pointer",
-            flexShrink: 0,
-            fontSize: 11,
-            whiteSpace: "nowrap",
-          }}
+          style={iconButtonStyle(sessionToolsMenuOpen, true)}
         >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-            <circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" /><circle cx="5" cy="12" r="1.5" />
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" />
           </svg>
-          <span>{translate("chat.sessionMenu")}</span>
         </button>
-        {sessionToolsMenuOpen && (
+        {sessionToolsMenuOpen && typeof document !== "undefined" && createPortal(
           <div
+            ref={sessionMenuPanelRef}
             role="menu"
-            aria-label={translate("chat.sessionMenu")}
+            aria-label={translate("chat.sessionActions")}
             style={{
-              position: "absolute",
-              top: "100%",
-              left: 0,
-              zIndex: 600,
+              // 对话栏 overflow:hidden 会裁切绝对定位菜单，改挂到 body。
+              position: "fixed",
+              top: sessionMenuRef.current?.getBoundingClientRect().bottom ?? 0,
+              right: typeof window === "undefined"
+                ? 0
+                : window.innerWidth - (sessionMenuRef.current?.getBoundingClientRect().right ?? 0),
+              zIndex: 800,
               minWidth: 168,
               background: "var(--bg-panel)",
               border: "1px solid var(--border)",
-              borderTop: "none",
               boxShadow: "0 8px 20px rgba(0,0,0,0.10)",
               padding: 4,
             }}
@@ -1623,7 +1719,8 @@ export function AppShell() {
                 {item.label}
               </button>
             ))}
-          </div>
+          </div>,
+          document.body,
         )}
       </div>
     );
@@ -1792,26 +1889,43 @@ export function AppShell() {
     );
   };
 
+  const chatHeaderFirstMessage = selectedSession?.firstMessage?.trim() ?? "";
+  const chatHeaderTitleFull = selectedSession?.name?.trim()
+    || skillExpansionsToSidebarTitle(chatHeaderFirstMessage)
+    || chatHeaderFirstMessage
+    || translate("sidebar.new");
+
   /**
-   * 对话入口：+ 新建；侧栏面板开关列表抽屉。
-   * 编辑器挂在对话栏顶；助手挂在中间主顶栏最右。不挂文件页签行。
+   * 对话标题栏左侧：会话名，空会话写「新对话」。不写「会话」二字。
    */
-  const renderWorkspaceChatActions = (opts?: { pullRight?: boolean }) => {
+  const renderChatTitle = () => (
+    <div
+      data-workspace-chat-title=""
+      title={chatHeaderTitleFull}
+      style={{
+        flex: 1,
+        minWidth: 0,
+        padding: "0 12px",
+        fontSize: 12,
+        color: "var(--text)",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        lineHeight: "36px",
+      }}
+    >
+      {chatHeaderTitleFull}
+    </div>
+  );
+
+  /**
+   * 对话列自己的顶栏：+ 新建、⋯ 当前窗溢出；历史关着时才带列表键。
+   * 只画在对话列顶，不横跨历史列（D27）。
+   */
+  const renderWorkspaceChatActions = (opts?: { pullRight?: boolean; includeTitle?: boolean; showHistoryToggle?: boolean }) => {
     const canStart = Boolean(activeCwd || selectedSession?.cwd);
-    const startNewConversation = () => {
-      const cwd = activeCwd ?? selectedSession?.cwd;
-      if (!cwd) return;
-      // 编辑器下对话在右侧；若面板关着，新建/看历史时先打开，否则用户看不到结果。
-      if (isEditorLayout) setRightPanelOpen(true);
-      const tempId = typeof crypto.randomUUID === "function"
-        ? crypto.randomUUID()
-        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-      handleNewSession(tempId, cwd);
-    };
-    const toggleHistory = () => {
-      if (isEditorLayout) setRightPanelOpen(true);
-      setAgentHistoryOpen((open) => !open);
-    };
+    const includeTitle = opts?.includeTitle ?? true;
+    const showHistoryToggle = opts?.showHistoryToggle ?? !agentHistoryOpen;
     const iconButtonStyle = (active: boolean, enabled: boolean): CSSProperties => ({
       display: "flex",
       alignItems: "center",
@@ -1827,6 +1941,9 @@ export function AppShell() {
       flexShrink: 0,
       transition: "color 0.12s, background 0.12s",
     });
+    const newChatLabel = translate("chat.newChatShortcut", {
+      shortcut: translate("chat.newChatShortcutHint"),
+    });
 
     return (
       <div
@@ -1834,17 +1951,20 @@ export function AppShell() {
         style={{
           display: "flex",
           alignItems: "stretch",
-          flexShrink: 0,
+          flex: includeTitle ? 1 : undefined,
+          minWidth: includeTitle ? 0 : undefined,
+          flexShrink: includeTitle ? 1 : 0,
           marginLeft: opts?.pullRight ? "auto" : 0,
         }}
       >
+        {includeTitle && renderChatTitle()}
         <button
           type="button"
           data-workspace-new-chat=""
           onClick={startNewConversation}
           disabled={!canStart}
-          title={translate("sidebar.new")}
-          aria-label={translate("sidebar.new")}
+          title={canStart ? newChatLabel : translate("sidebar.selectProject")}
+          aria-label={canStart ? newChatLabel : translate("sidebar.selectProject")}
           style={iconButtonStyle(false, canStart)}
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
@@ -1852,20 +1972,23 @@ export function AppShell() {
             <line x1="5" y1="12" x2="19" y2="12" />
           </svg>
         </button>
-        <button
-          type="button"
-          data-workspace-chat-history=""
-          onClick={toggleHistory}
-          aria-pressed={agentHistoryOpen}
-          title={translate(agentHistoryOpen ? "chat.hideHistory" : "chat.historyList")}
-          aria-label={translate(agentHistoryOpen ? "chat.hideHistory" : "chat.historyList")}
-          style={iconButtonStyle(agentHistoryOpen, true)}
-        >
-          {/* D2：列表用侧栏面板图，不用时钟。 */}
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <rect x="3" y="3" width="18" height="18" rx="2" /><line x1="9" y1="3" x2="9" y2="21" />
-          </svg>
-        </button>
+        {renderSessionToolsButton(iconButtonStyle)}
+        {showHistoryToggle && (
+          <button
+            type="button"
+            data-workspace-chat-history=""
+            onClick={toggleHistory}
+            aria-pressed={agentHistoryOpen}
+            title={translate(agentHistoryOpen ? "chat.hideHistory" : "chat.historyList")}
+            aria-label={translate(agentHistoryOpen ? "chat.hideHistory" : "chat.historyList")}
+            style={iconButtonStyle(agentHistoryOpen, true)}
+          >
+            {/* D2：列表用侧栏面板图，不用时钟。 */}
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3" y="3" width="18" height="18" rx="2" /><line x1="9" y1="3" x2="9" y2="21" />
+            </svg>
+          </button>
+        )}
       </div>
     );
   };
@@ -1932,7 +2055,45 @@ export function AppShell() {
           onCloseTab={handleCloseFileTab}
         />
       </div>
-      {/* 与「会话」同行最右：收紧整块右侧对话栏（右轨图标，区别于对话栏列表键）。 */}
+      {/* 栏关着时主顶栏出现新建 +，避免入口跟着对话栏一起消失。 */}
+      {includeCollapse && !rightPanelOpen && (
+        <button
+          type="button"
+          data-workspace-new-chat-collapsed=""
+          onClick={startNewConversation}
+          disabled={!Boolean(activeCwd || selectedSession?.cwd)}
+          title={
+            activeCwd || selectedSession?.cwd
+              ? translate("chat.newChatShortcut", { shortcut: translate("chat.newChatShortcutHint") })
+              : translate("sidebar.selectProject")
+          }
+          aria-label={
+            activeCwd || selectedSession?.cwd
+              ? translate("chat.newChatShortcut", { shortcut: translate("chat.newChatShortcutHint") })
+              : translate("sidebar.selectProject")
+          }
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: TOP_BAR_ICON_BUTTON_SIZE,
+            height: TOP_BAR_ICON_BUTTON_SIZE,
+            padding: 0,
+            background: "none",
+            border: "none",
+            borderLeft: "1px solid var(--border)",
+            color: (activeCwd || selectedSession?.cwd) ? "var(--text-muted)" : "var(--text-dim)",
+            cursor: (activeCwd || selectedSession?.cwd) ? "pointer" : "not-allowed",
+            flexShrink: 0,
+          }}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+        </button>
+      )}
+      {/* 收紧整块右侧对话栏（右轨图标，区别于对话栏列表键）。 */}
       {includeCollapse && (
         <div data-collapse-right-panel="">
           {renderMainFileToggle(false)}
@@ -1999,23 +2160,34 @@ export function AppShell() {
       data-workspace="agent"
       style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}
     >
-      {/* 编辑器：对话栏自己一行顶栏。助手：入口在中间主顶栏，这里不再叠一行。 */}
-      {!isMobile && isEditorLayout && (
+      <div style={{ flex: 1, display: "flex", flexDirection: "row", overflow: "hidden", minHeight: 0 }}>
         <div
-          data-agent-chrome=""
+          data-agent-column=""
           style={{
+            flex: 1,
             display: "flex",
-            alignItems: "center",
-            flexShrink: 0,
-            height: 36,
-            background: "var(--bg-panel)",
-            borderBottom: "1px solid var(--border)",
+            flexDirection: "column",
+            overflow: "hidden",
+            minWidth: 0,
+            minHeight: 0,
           }}
         >
-          {renderWorkspaceChatActions({ pullRight: true })}
-        </div>
-      )}
-      <div style={{ flex: 1, display: "flex", flexDirection: "row", overflow: "hidden", minHeight: 0 }}>
+        {/* 顶栏只属于对话列，历史开着时不再横跨搜索栏（D27）。 */}
+        {!isMobile && (
+          <div
+            data-agent-chrome=""
+            style={{
+              display: "flex",
+              alignItems: "center",
+              flexShrink: 0,
+              height: 36,
+              background: "var(--bg-panel)",
+              borderBottom: "1px solid var(--border)",
+            }}
+          >
+            {renderWorkspaceChatActions({ showHistoryToggle: !agentHistoryOpen })}
+          </div>
+        )}
         <div style={{
           flex: 1,
           overflow: "hidden",
@@ -2090,6 +2262,7 @@ export function AppShell() {
           )
         ) : null}
       </div>
+        </div>
         {!isMobile && agentHistoryOpen && (
           <div
             {...historyResizer.separatorProps}
@@ -2357,18 +2530,12 @@ export function AppShell() {
               )}
             </div>
           )}
-          {!isMobile && (
-            <>
-              {renderProjectTrustWarning(false)}
-              {renderSessionToolsButton()}
-            </>
-          )}
-          {/* 编辑器：页签与收紧右侧并入本行；审阅按钮在文档底栏。 */}
+          {!isMobile && renderProjectTrustWarning(false)}
+          {/* 编辑器：页签与收紧右侧并入本行；审阅按钮在文档底栏。「会话」假页签已移走。 */}
           {mergeFileTabsIntoMainTopBar && renderFileTabStrip(true)}
-          {/* 助手：+ / 列表抽屉 / 收起文件栏仍挂中间主顶栏最右。 */}
+          {/* 助手：对话顶栏已挂在对话列；主顶栏只留收起文件列。 */}
           {!isMobile && !isEditorLayout && (
             <div data-workspace-chrome-end="" style={{ display: "flex", alignItems: "stretch", marginLeft: "auto" }}>
-              {renderWorkspaceChatActions()}
               {renderMainFileToggle(false)}
             </div>
           )}
@@ -2380,7 +2547,7 @@ export function AppShell() {
             compact={isMobile}
             containerRef={topBarRef}
             open={activeTopPanel === "branches"}
-            onToggle={() => toggleTopPanel("branches")}
+            onToggle={() => handleBranchesAction()}
             hasSession={showChat}
             hideInlineButton
           />

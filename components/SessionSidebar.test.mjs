@@ -68,3 +68,14 @@ test("does not expose disk-backed actions for transient sessions", () => {
   assert.match(sessionItemSource, /if \(session\.transient\) return;/);
   assert.match(sessionItemSource, /\{hovered && !session\.transient && \(/);
 });
+
+test("portaled history list has search, new chat, and date groups", () => {
+  assert.match(source, /data-history-chrome=/);
+  assert.match(source, /data-history-search=/);
+  assert.match(source, /data-history-new-chat=/);
+  assert.match(source, /groupRootsByDate/);
+  assert.match(source, /HISTORY_BUCKET_DEFAULT_CAP/);
+  assert.match(source, /data-history-more=/);
+  assert.match(source, /data-history-panel-toggle=/);
+  assert.match(source, /onToggleHistory/);
+});

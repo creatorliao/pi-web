@@ -42,8 +42,9 @@ test("TextFileViewer no longer paints a stacked file-name title", () => {
   assert.doesNotMatch(block, /file-viewer-meta/);
   assert.doesNotMatch(block, /createPortal\(/);
   assert.match(block, /<FileViewerStatusBar/);
-  assert.match(block, /files\.docOriginal/);
-  assert.match(block, /files\.docPreview/);
+  assert.match(block, /<FilePathStatusMeta/);
+  assert.doesNotMatch(block, /files\.docOriginal/);
+  assert.doesNotMatch(block, /files\.docPreview/);
 });
 
 test("FileViewer forwards watcher state to every viewer implementation", () => {
@@ -84,4 +85,9 @@ test("markdown table tokens stay inline despite Tailwind's table utility", () =>
   assert.match(html, /class="token table[ "]/);
   assert.match(cssSource, /span\.token\.table\s*\{[^}]*display:\s*inline;/);
   assert.match(cssSource, /\.file-viewer-statusbar\s*\{/);
+  assert.match(cssSource, /\.file-viewer-statusbar-path\s*\{/);
+  assert.match(source, /function FilePathStatusMeta\(/);
+  assert.match(source, /getStatusBarFilePath\(/);
+  assert.doesNotMatch(source, /\{originLabel\}/);
+  assert.doesNotMatch(source, /\{viewLabel\}/);
 });

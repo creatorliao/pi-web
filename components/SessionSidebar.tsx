@@ -12,6 +12,15 @@ import { useI18n } from "@/hooks/useI18n";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
 import { markOverlayScrolling } from "@/lib/overlay-scroll";
+import {
+  HISTORY_BUCKET_DEFAULT_CAP,
+  filterSessionTreeByQuery,
+  groupRootsByDate,
+  readExpandedHistoryBuckets,
+  sliceBucketRoots,
+  writeExpandedHistoryBuckets,
+  type HistoryDateBucket,
+} from "@/lib/session-history-groups";
 
 declare global {
   interface Window {
@@ -106,6 +115,8 @@ interface Props {
   onRunningSessionIdsChange?: (ids: Set<string>) => void;
   /** 有宿主时，会话列表渲染到对话块，左栏只留项目和目录。 */
   sessionListPortalTarget?: HTMLElement | null;
+  /** 历史抽屉头上的收起：与对话列顶栏的列表键成对，避免共用一条轨。 */
+  onToggleHistory?: () => void;
   showHiddenFiles?: boolean;
 }
 
@@ -397,7 +408,7 @@ function PiWebTitle() {
   );
 }
 
-export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, onRunningSessionIdsChange, sessionListPortalTarget, showHiddenFiles = false }: Props) {
+export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, onRunningSessionIdsChange, sessionListPortalTarget, onToggleHistory, showHiddenFiles = false }: Props) {
   const { t } = useI18n();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -433,6 +444,10 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [explorerRefreshDone, setExplorerRefreshDone] = useState(false);
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => loadUnreadSessionIds());
+  const [historyQuery, setHistoryQuery] = useState("");
+  const [expandedHistoryBuckets, setExpandedHistoryBuckets] = useState<Set<HistoryDateBucket>>(
+    () => readExpandedHistoryBuckets(),
+  );
   const previousRunningSessionIdsRef = useRef<Set<string>>(new Set());
   // Once polling has delivered a snapshot it is the source of truth for
   // running state; late /api/sessions responses must not overwrite it.
@@ -958,7 +973,39 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       : null);
 
   // Build parent-child tree within the filtered set
-  const sessionTree = buildSessionTree(filteredSessions);
+  const sessionTree = useMemo(() => buildSessionTree(filteredSessions), [filteredSessions]);
+  const useHistoryChrome = Boolean(sessionListPortalTarget);
+  const historySearching = historyQuery.trim().length > 0;
+  const historyGroups = useMemo(() => {
+    const filtered = useHistoryChrome
+      ? filterSessionTreeByQuery(sessionTree, historyQuery)
+      : sessionTree;
+    if (!useHistoryChrome) {
+      return [{ bucket: null as HistoryDateBucket | null, roots: filtered, total: filtered.length }];
+    }
+    return groupRootsByDate(filtered).map((group) => ({
+      bucket: group.bucket as HistoryDateBucket | null,
+      roots: group.roots,
+      total: group.roots.length,
+    }));
+  }, [historyQuery, sessionTree, useHistoryChrome]);
+
+  const toggleHistoryBucket = useCallback((bucket: HistoryDateBucket, expand: boolean) => {
+    setExpandedHistoryBuckets((prev) => {
+      const next = new Set(prev);
+      if (expand) next.add(bucket);
+      else next.delete(bucket);
+      writeExpandedHistoryBuckets(next);
+      return next;
+    });
+  }, []);
+
+  const historyBucketLabel = (bucket: HistoryDateBucket) => {
+    if (bucket === "today") return t("history.groupToday");
+    if (bucket === "yesterday") return t("history.groupYesterday");
+    if (bucket === "last7") return t("history.groupLast7");
+    return t("history.groupOlder");
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
@@ -1625,37 +1672,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         )}
       </div>
 
-      {/* Session list：无门户时仍在左栏；有门户则渲染到对话块。 */}
+      {/* Session list：无门户时仍在左栏；有门户则渲染到对话块，并带搜索/分组头。 */}
       {(() => {
-        const sessionList = (
-      <div
-        data-session-list="true"
-        className="overlay-scroll"
-        onScroll={(event) => markOverlayScrolling(event.currentTarget)}
-        style={{
-          flex: sessionListPortalTarget ? "1 1 auto" : (explorerOpen && (selectedCwdProp || selectedCwd) ? "1 1 0" : "1 1 auto"),
-          overflowY: "auto",
-          padding: "0",
-          minHeight: sessionListPortalTarget ? 0 : 80,
-          height: sessionListPortalTarget ? "100%" : undefined,
-        }}
-      >
-        {loading && (
-          <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 12 }}>
-            {t("sidebar.loading")}
-          </div>
-        )}
-        {error && (
-          <div style={{ padding: "12px 14px", color: "#f87171", fontSize: 12 }}>
-            {error}
-          </div>
-        )}
-        {!loading && !error && filteredSessions.length === 0 && (
-          <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 12 }}>
-            {t("sidebar.noSessions")}
-          </div>
-        )}
-        {sessionTree.map((node) => (
+        const renderTreeItems = (nodes: typeof sessionTree) => nodes.map((node) => (
           <SessionTreeItem
             key={node.session.id}
             node={node}
@@ -1670,9 +1689,224 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             }}
             depth={0}
           />
-        ))}
-      </div>
+        ));
+
+        const listBody = (
+          <div
+            data-session-list="true"
+            className="overlay-scroll"
+            onScroll={(event) => markOverlayScrolling(event.currentTarget)}
+            style={{
+              flex: "1 1 auto",
+              overflowY: "auto",
+              padding: "0",
+              minHeight: sessionListPortalTarget ? 0 : 80,
+            }}
+          >
+            {loading && (
+              <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 12 }}>
+                {t("sidebar.loading")}
+              </div>
+            )}
+            {error && (
+              <div style={{ padding: "12px 14px", color: "#f87171", fontSize: 12 }}>
+                {error}
+              </div>
+            )}
+            {!loading && !error && filteredSessions.length === 0 && (
+              <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 12 }}>
+                {t("sidebar.noSessions")}
+              </div>
+            )}
+            {!loading && !error && filteredSessions.length > 0 && historySearching && historyGroups.every((group) => group.roots.length === 0) && (
+              <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 12 }}>
+                {t("history.noMatches")}
+              </div>
+            )}
+            {!loading && !error && historyGroups.map((group) => {
+              const bucket = group.bucket;
+              const expanded = bucket ? expandedHistoryBuckets.has(bucket) : true;
+              const sliced = bucket
+                ? sliceBucketRoots(group.roots, HISTORY_BUCKET_DEFAULT_CAP, expanded, historySearching)
+                : { visible: group.roots, hiddenCount: 0 };
+              const overCap = Boolean(bucket) && group.total > HISTORY_BUCKET_DEFAULT_CAP;
+              return (
+                <div key={bucket ?? "flat"} data-history-group={bucket ?? undefined}>
+                  {bucket && (
+                    <div
+                      style={{
+                        padding: "10px 12px 4px",
+                        fontSize: 11,
+                        color: "var(--text-muted)",
+                        letterSpacing: "0.02em",
+                      }}
+                    >
+                      {historyBucketLabel(bucket)}
+                    </div>
+                  )}
+                  {renderTreeItems(sliced.visible)}
+                  {bucket && overCap && !historySearching && !expanded && (
+                    <button
+                      type="button"
+                      data-history-more={bucket}
+                      onClick={() => toggleHistoryBucket(bucket, true)}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        width: "100%",
+                        padding: "8px 12px",
+                        background: "none",
+                        border: "none",
+                        color: "var(--text-muted)",
+                        cursor: "pointer",
+                        fontSize: 12,
+                        textAlign: "left",
+                      }}
+                    >
+                      <span aria-hidden="true">⋯</span>
+                      {t("history.showMore")}
+                    </button>
+                  )}
+                  {bucket && overCap && !historySearching && expanded && (
+                    <button
+                      type="button"
+                      data-history-collapse={bucket}
+                      onClick={() => toggleHistoryBucket(bucket, false)}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        width: "100%",
+                        padding: "8px 12px",
+                        background: "none",
+                        border: "none",
+                        color: "var(--text-muted)",
+                        cursor: "pointer",
+                        fontSize: 12,
+                        textAlign: "left",
+                      }}
+                    >
+                      {t("history.collapse")}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         );
+
+        const sessionList = sessionListPortalTarget ? (
+          <div
+            data-history-chrome=""
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              height: "100%",
+              minHeight: 0,
+            }}
+          >
+            <div
+              data-history-toolbar=""
+              style={{
+                flexShrink: 0,
+                display: "flex",
+                flexDirection: "column",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  height: 36,
+                  padding: "0 6px 0 10px",
+                  gap: 6,
+                  borderBottom: "1px solid var(--border)",
+                }}
+              >
+              <input
+                data-history-search=""
+                type="search"
+                value={historyQuery}
+                onChange={(event) => setHistoryQuery(event.target.value)}
+                placeholder={t("history.searchPlaceholder")}
+                aria-label={t("history.searchPlaceholder")}
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  height: 28,
+                  padding: "0 10px",
+                  border: "1px solid var(--border)",
+                  borderRadius: 7,
+                  background: "var(--bg)",
+                  color: "var(--text)",
+                  fontSize: 12,
+                  outline: "none",
+                }}
+              />
+              {onToggleHistory && (
+                <button
+                  type="button"
+                  data-history-panel-toggle=""
+                  onClick={onToggleHistory}
+                  title={t("chat.hideHistory")}
+                  aria-label={t("chat.hideHistory")}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: 32,
+                    height: 32,
+                    padding: 0,
+                    background: "var(--bg-selected)",
+                    border: "none",
+                    borderRadius: 6,
+                    color: "var(--text)",
+                    cursor: "pointer",
+                    flexShrink: 0,
+                  }}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <rect x="3" y="3" width="18" height="18" rx="2" /><line x1="15" y1="3" x2="15" y2="21" />
+                  </svg>
+                </button>
+              )}
+              </div>
+              <button
+                type="button"
+                data-history-new-chat=""
+                onClick={handleNewSession}
+                disabled={!selectedCwd}
+                title={selectedCwd ? t("sidebar.newSessionTitle", { path: selectedCwd }) : t("sidebar.selectProject")}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  width: "calc(100% - 20px)",
+                  margin: "6px 10px 8px",
+                  height: 32,
+                  padding: "0 10px",
+                  background: "var(--bg-hover)",
+                  border: "1px solid var(--border)",
+                  borderRadius: 7,
+                  color: selectedCwd ? "var(--text)" : "var(--text-dim)",
+                  cursor: selectedCwd ? "pointer" : "not-allowed",
+                  fontSize: 12,
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+                  <line x1="6" y1="1" x2="6" y2="11" />
+                  <line x1="1" y1="6" x2="11" y2="6" />
+                </svg>
+                <span>{t("sidebar.new")}</span>
+                <span style={{ marginLeft: "auto", color: "var(--text-dim)", fontSize: 11 }}>
+                  {t("chat.newChatShortcutHint")}
+                </span>
+              </button>
+            </div>
+            {listBody}
+          </div>
+        ) : listBody;
+
         if (sessionListPortalTarget) return createPortal(sessionList, sessionListPortalTarget);
         return sessionList;
       })()}
