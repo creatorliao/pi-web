@@ -6,7 +6,7 @@ import { ToastProvider } from "@/hooks/useToast";
 
 export default function Home() {
   return (
-    <Suspense>
+    <Suspense fallback={<div style={{ width: "100%", height: "100%", background: "var(--bg)" }} />}>
       <I18nProvider>
         <ToastProvider>
           <AppShell />

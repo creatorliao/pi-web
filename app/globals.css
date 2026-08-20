@@ -105,7 +105,7 @@ html, body {
   overflow: hidden;
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-ui);
   font-size: 14px;
   overscroll-behavior: none;
 }
@@ -163,7 +163,7 @@ body {
   overflow: hidden;
   color: var(--text);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -206,7 +206,7 @@ body {
   background: transparent;
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   text-align: left;
 }
 
@@ -323,7 +323,7 @@ button.extension-widget-trigger:focus-visible {
   overflow: hidden;
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -332,7 +332,13 @@ button.extension-widget-trigger:focus-visible {
 }
 
 :root {
-  --font-mono: var(--font-noto-mono), 'JetBrains Mono', 'Fira Code', 'Consolas', ui-monospace, 'PingFang SC', 'Microsoft YaHei', monospace;
+  /* 系统 UI 在前：Mac 用 SF/苹方；Win 上前两项不存在，结果仍是 Segoe + 雅黑 */
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "Segoe UI Variable",
+    system-ui, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei",
+    sans-serif;
+  /* 系统等宽在前：Mac 用 Menlo；Win 落到 Consolas。不下载、不依赖 JetBrains/Fira/Noto */
+  --font-mono: Menlo, Monaco, Consolas, "Cascadia Mono",
+    "Droid Sans Mono", "Courier New", ui-monospace, monospace;
 }
 
 pre, code {
@@ -578,7 +584,7 @@ pre, code {
   border-radius: 6px;
   background: var(--bg-panel);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.45;
   list-style: none;
 }
@@ -615,6 +621,7 @@ pre, code {
 .markdown-code-lang {
   color: var(--text-muted);
   font-family: var(--font-mono);
+  font-size: 12px;
   font-weight: 650;
 }
 .markdown-code-actions {

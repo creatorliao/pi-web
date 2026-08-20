@@ -9,7 +9,11 @@ import { ChatWindow } from "./ChatWindow";
 import { FileViewer } from "./FileViewer";
 import { TabBar, type Tab } from "./TabBar";
 import { openFileTab, saveFileViewerState } from "./file-tab-state";
-import { SettingsDialog } from "./SettingsDialog";
+import { SettingsDialog, type SettingsSection } from "./SettingsDialog";
+import { DirectoryPicker } from "./DirectoryPicker";
+import { WorkspacePicker } from "./WorkspacePicker";
+import { probeModelsReady, type ModelsReady } from "@/lib/models-ready";
+import { toWorkspaceCards, type WorkspaceCard } from "@/lib/project-groups";
 import { AppStatusBar, type StatusWorktree } from "./AppStatusBar";
 import type { ToolPreset } from "@/lib/tool-presets";
 import { ProjectTrustDialog } from "./ProjectTrustDialog";
@@ -67,6 +71,21 @@ import { shouldAttemptAutoSessionTitle } from "@/lib/session-auto-title";
 type SessionCopyField = "file" | "id";
 type AutoNameStatus = { kind: "idle" } | { kind: "naming" };
 
+/** 冷启动唯一相位。switcher 是 ready 上的布尔，不单独成相。 */
+type WorkspacePhase =
+  | "welcome-loading"
+  | "welcome"
+  | "welcome-error"
+  | "deeplink-validating"
+  | "deeplink-error"
+  | "ready";
+
+function initialWorkspacePhase(navigation: { requestedCwd: string | null; sessionId: string | null }): WorkspacePhase {
+  if (navigation.requestedCwd) return "deeplink-validating";
+  if (navigation.sessionId) return "ready";
+  return "welcome-loading";
+}
+
 type StatusGitInfo = {
   isGit: boolean;
   projectRoot: string;
@@ -123,10 +142,19 @@ export function AppShell() {
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null);
   const [newSessionDraftId, setNewSessionDraftId] = useState("initial");
   const activeNewSessionDraftKeyRef = useRef<string | null>(null);
-  const [initialCwdStatus, setInitialCwdStatus] = useState<"idle" | "validating" | "ready" | "error">(
-    () => initialNavigation.requestedCwd ? "validating" : "idle",
+  const [workspacePhase, setWorkspacePhase] = useState<WorkspacePhase>(
+    () => initialWorkspacePhase(initialNavigation),
   );
   const [initialCwdError, setInitialCwdError] = useState<string | null>(null);
+  const [welcomeProjects, setWelcomeProjects] = useState<WorkspaceCard[]>([]);
+  const [welcomeError, setWelcomeError] = useState<string | null>(null);
+  const [modelsReady, setModelsReady] = useState<ModelsReady>("unknown");
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [browseOpen, setBrowseOpen] = useState(false);
+  const [browseBusy, setBrowseBusy] = useState(false);
+  const [browseError, setBrowseError] = useState<string | null>(null);
+  const [settingsSection, setSettingsSection] = useState<SettingsSection | undefined>(undefined);
+  const enteringLockRef = useRef(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [sessionKey, setSessionKey] = useState(0);
   const [explorerRefreshKey, setExplorerRefreshKey] = useState(0);
@@ -739,7 +767,7 @@ export function AppShell() {
     if (!requestedCwd) return;
 
     const controller = new AbortController();
-    setInitialCwdStatus("validating");
+    setWorkspacePhase("deeplink-validating");
     setInitialCwdError(null);
 
     void fetch("/api/cwd/validate", {
@@ -761,12 +789,12 @@ export function AppShell() {
         setNewSessionDraftId(draftId);
         activeNewSessionDraftKeyRef.current = `new:${draftId}:${data.cwd}`;
         setNewSessionCwd(data.cwd);
-        setInitialCwdStatus("ready");
+        setWorkspacePhase("ready");
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
         setInitialCwdError(error instanceof Error ? error.message : String(error));
-        setInitialCwdStatus("error");
+        setWorkspacePhase("deeplink-error");
       });
 
     return () => controller.abort();
@@ -875,6 +903,107 @@ export function AppShell() {
     }
     router.replace("/", { scroll: false });
   }, [activeCwd, invalidateWorkspaceRestore, newSessionCwd, router, selectedSession, restoreWorkspaceContext]);
+
+  const loadWelcomeData = useCallback(async () => {
+    setWelcomeError(null);
+    setWorkspacePhase((current) => (
+      current === "ready" || current === "deeplink-validating" || current === "deeplink-error"
+        ? current
+        : "welcome-loading"
+    ));
+    try {
+      const [sessionsRes, homeRes] = await Promise.all([
+        fetch("/api/sessions", { cache: "no-store" }),
+        fetch("/api/home"),
+      ]);
+      if (!sessionsRes.ok) throw new Error(`HTTP ${sessionsRes.status}`);
+      const sessionsData = await sessionsRes.json() as { sessions: SessionInfo[] };
+      const homeData = homeRes.ok ? await homeRes.json() as { home?: string } : {};
+      const home = homeData.home ?? "";
+      setWelcomeProjects(toWorkspaceCards(sessionsData.sessions, home));
+      setWorkspacePhase((current) => (
+        current === "ready" || current === "deeplink-validating"
+          ? current
+          : "welcome"
+      ));
+    } catch (error) {
+      setWelcomeError(error instanceof Error ? error.message : String(error));
+      setWorkspacePhase((current) => (current === "ready" ? current : "welcome-error"));
+    }
+    const ready = await probeModelsReady();
+    setModelsReady(ready);
+  }, []);
+
+  useEffect(() => {
+    if (workspacePhase === "welcome-loading") {
+      void loadWelcomeData();
+    }
+  }, [workspacePhase, loadWelcomeData]);
+
+  const enterWorkspace = useCallback((root: string, projectKey: string) => {
+    if (enteringLockRef.current) return;
+    enteringLockRef.current = true;
+    setSwitcherOpen(false);
+    setBrowseOpen(false);
+    setWorkspacePhase("ready");
+    handleCwdChange(root, root, projectKey);
+    window.setTimeout(() => {
+      enteringLockRef.current = false;
+    }, 0);
+  }, [handleCwdChange]);
+
+  const handlePickerSelect = useCallback((project: WorkspaceCard) => {
+    if (workspacePhase === "ready" && project.key === (activeProjectKeyRef.current ?? null)) {
+      setSwitcherOpen(false);
+      return;
+    }
+    enterWorkspace(project.root, project.key);
+  }, [enterWorkspace, workspacePhase]);
+
+  const handleDefaultCwdFromPicker = useCallback(async () => {
+    try {
+      const res = await fetch("/api/default-cwd", { method: "POST" });
+      const data = await res.json() as { cwd?: string; projectRoot?: string; projectKey?: string; error?: string };
+      if (!res.ok || !data.cwd) {
+        showToast({ tone: "error", message: data.error ?? translate("workspace.unable") });
+        return;
+      }
+      enterWorkspace(data.cwd, data.projectKey ?? data.projectRoot ?? data.cwd);
+    } catch (error) {
+      showToast({
+        tone: "error",
+        message: error instanceof Error ? error.message : translate("workspace.unable"),
+      });
+    }
+  }, [enterWorkspace, showToast, translate]);
+
+  const handleBrowseSelect = useCallback(async (path: string) => {
+    setBrowseBusy(true);
+    setBrowseError(null);
+    try {
+      const res = await fetch("/api/cwd/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd: path }),
+      });
+      const data = await res.json() as {
+        cwd?: string;
+        projectRoot?: string;
+        projectKey?: string;
+        error?: string;
+      };
+      if (!res.ok || !data.cwd) {
+        setBrowseError(data.error ?? `HTTP ${res.status}`);
+        return;
+      }
+      setBrowseOpen(false);
+      enterWorkspace(data.cwd, data.projectKey ?? data.projectRoot ?? data.cwd);
+    } catch (error) {
+      setBrowseError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBrowseBusy(false);
+    }
+  }, [enterWorkspace]);
 
   const statusCwd = selectedSession?.cwd ?? newSessionCwd ?? activeCwd;
 
@@ -1231,6 +1360,8 @@ export function AppShell() {
 
   const handleInitialRestoreDone = useCallback(() => {
     setInitialSessionRestored(true);
+    // 深链 session 找不到：回欢迎，不落到 projects[0]
+    setWorkspacePhase("welcome-loading");
   }, []);
 
   const handleSessionDeleted = useCallback((sessionId: string) => {
@@ -1430,6 +1561,17 @@ export function AppShell() {
     return () => observer.disconnect();
   }, [windowTitle]);
 
+  useEffect(() => {
+    if (!switcherOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setSwitcherOpen(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [switcherOpen]);
+
   const sidebarContent = (
     <>
       <SessionSidebar
@@ -1437,11 +1579,15 @@ export function AppShell() {
         onSelectSession={handleSelectSession}
         onNewSession={handleNewSession}
         initialSessionId={initialSessionId}
-        skipInitialProjectSelection={initialNavigation.requestedCwd !== null}
+        skipInitialProjectSelection
         onInitialRestoreDone={handleInitialRestoreDone}
+        onRequestWorkspaceSwitcher={() => {
+          setSwitcherOpen(true);
+          void loadWelcomeData();
+        }}
         refreshKey={refreshKey}
         onSessionDeleted={handleSessionDeleted}
-        selectedCwd={selectedSession?.cwd ?? newSessionCwd ?? null}
+        selectedCwd={selectedSession?.cwd ?? newSessionCwd ?? activeCwd}
         onCwdChange={handleCwdChange}
         onOpenFile={handleOpenFile}
         explorerRefreshKey={explorerRefreshKey}
@@ -2172,46 +2318,10 @@ export function AppShell() {
             playDoneSound={playDoneSound}
             unlockAudio={unlockAudio}
           />
-        ) : initialCwdStatus === "validating" ? (
-          <div
-            role="status"
-            style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, padding: 24, color: "var(--text-muted)", textAlign: "center" }}
-          >
-            <div style={{ fontSize: 14, color: "var(--text)" }}>{translate("workspace.opening")}</div>
-            <div style={{ maxWidth: "min(720px, 100%)", overflowWrap: "anywhere", fontFamily: "var(--font-mono)", fontSize: 12 }}>
-              {initialNavigation.requestedCwd}
-            </div>
-          </div>
-        ) : initialCwdStatus === "error" ? (
-          <div
-            role="alert"
-            style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, padding: 24, color: "var(--text-muted)", textAlign: "center" }}
-          >
-            <div style={{ fontSize: 14, color: "#dc2626" }}>{translate("workspace.unable")}</div>
-            <div style={{ maxWidth: "min(720px, 100%)", overflowWrap: "anywhere", fontFamily: "var(--font-mono)", fontSize: 12 }}>
-              {initialNavigation.requestedCwd}
-            </div>
-            <div style={{ maxWidth: 720, fontSize: 12 }}>{initialCwdError}</div>
-          </div>
         ) : showPlaceholder ? (
-          activeCwd ? (
-            <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontSize: 15 }}>
-              {translate("workspace.selectSession")}
-            </div>
-          ) : (
-            <div style={{ position: "absolute", top: 12, left: 12, display: "flex", alignItems: "flex-start", gap: 8, userSelect: "none", pointerEvents: "none" }}>
-              <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.7, flexShrink: 0 }}>
-                <line x1="20" y1="12" x2="4" y2="12" /><polyline points="10 6 4 12 10 18" />
-              </svg>
-              <div>
-                <div style={{ fontSize: 18, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>{translate("workspace.getStarted")}</div>
-                <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.8 }}>
-                  <span style={{ color: "var(--text-dim)", marginRight: 6 }}>1.</span>{translate("workspace.selectProject")}<br />
-                  <span style={{ color: "var(--text-dim)", marginRight: 6 }}>2.</span>{translate("workspace.addModels")}
-                </div>
-              </div>
-            </div>
-          )
+          <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontSize: 15 }}>
+            {translate("workspace.selectSession")}
+          </div>
         ) : null}
       </div>
         </div>
@@ -2245,6 +2355,143 @@ export function AppShell() {
       </div>
     </div>
   );
+
+  const picker = (
+    <WorkspacePicker
+      host={workspacePhase === "ready" ? "modal" : "welcome"}
+      projects={welcomeProjects}
+      loading={workspacePhase === "welcome-loading"}
+      error={welcomeError}
+      currentKey={workspacePhase === "ready" ? (activeProjectKeyRef.current ?? null) : null}
+      modelsReady={modelsReady}
+      onSelect={handlePickerSelect}
+      onBrowse={() => {
+        setBrowseError(null);
+        setBrowseOpen(true);
+      }}
+      onDefaultCwd={() => void handleDefaultCwdFromPicker()}
+      onRetry={() => {
+        setWorkspacePhase("welcome-loading");
+      }}
+      onAddModels={() => {
+        setSettingsSection("models");
+        setSettingsOpen(true);
+      }}
+      onClose={workspacePhase === "ready" ? () => setSwitcherOpen(false) : undefined}
+    />
+  );
+
+  const workspaceOverlays = (
+    <>
+      {browseOpen && (
+        <DirectoryPicker
+          busy={browseBusy}
+          error={browseError}
+          onCancel={() => {
+            setBrowseOpen(false);
+            setBrowseError(null);
+          }}
+          onSelect={(path) => void handleBrowseSelect(path)}
+        />
+      )}
+      {settingsOpen && (
+        <SettingsDialog
+          cwd={projectTrustCwd}
+          sessionId={selectedSession?.id ?? null}
+          soundEnabled={soundEnabled}
+          onSoundToggle={onSoundToggle}
+          initialSection={settingsSection}
+          onClose={() => {
+            setSettingsOpen(false);
+            setSettingsSection(undefined);
+            setModelsRefreshKey((key) => key + 1);
+          }}
+          onModelsClosed={() => setModelsRefreshKey((key) => key + 1)}
+          onPluginsReloaded={() => setSessionKey((key) => key + 1)}
+        />
+      )}
+    </>
+  );
+
+  if (workspacePhase !== "ready") {
+    return (
+      <>
+        <div style={{
+          width: "100%",
+          height: "100%",
+          background: "var(--bg)",
+          overflow: "auto",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+        }}
+        >
+          {workspacePhase === "deeplink-validating" && (
+            <div role="status" style={{
+              marginTop: "20vh",
+              textAlign: "center",
+              padding: 24,
+              color: "var(--text-muted)",
+              fontFamily: "var(--font-ui)",
+            }}
+            >
+              <div style={{ fontSize: 14, color: "var(--text)" }}>{translate("workspace.opening")}</div>
+              <div style={{
+                marginTop: 8,
+                maxWidth: "min(720px, 100%)",
+                overflowWrap: "anywhere",
+                fontFamily: "var(--font-mono)",
+                fontSize: 12,
+              }}
+              >
+                {initialNavigation.requestedCwd}
+              </div>
+            </div>
+          )}
+          {workspacePhase === "deeplink-error" && (
+            <div role="alert" style={{
+              marginTop: "20vh",
+              textAlign: "center",
+              padding: 24,
+              fontFamily: "var(--font-ui)",
+            }}
+            >
+              <div style={{ fontSize: 14, color: "#dc2626" }}>{translate("workspace.unable")}</div>
+              <div style={{
+                marginTop: 8,
+                maxWidth: "min(720px, 100%)",
+                overflowWrap: "anywhere",
+                fontFamily: "var(--font-mono)",
+                fontSize: 12,
+              }}
+              >
+                {initialNavigation.requestedCwd}
+              </div>
+              <div style={{ marginTop: 8, maxWidth: 720, fontSize: 12, color: "var(--text-muted)" }}>{initialCwdError}</div>
+              <button
+                type="button"
+                onClick={() => setWorkspacePhase("welcome-loading")}
+                style={{
+                  marginTop: 16,
+                  padding: 0,
+                  border: "none",
+                  background: "none",
+                  color: "var(--accent)",
+                  cursor: "pointer",
+                  fontFamily: "var(--font-ui)",
+                  fontSize: 14,
+                }}
+              >
+                {translate("workspace.chooseAnother")}
+              </button>
+            </div>
+          )}
+          {(workspacePhase === "welcome-loading" || workspacePhase === "welcome" || workspacePhase === "welcome-error") && picker}
+        </div>
+        {workspaceOverlays}
+      </>
+    );
+  }
 
   return (
     <>
@@ -2787,20 +3034,40 @@ export function AppShell() {
       placement="above"
     />
     </div>
-    {settingsOpen && (
-      <SettingsDialog
-        cwd={projectTrustCwd}
-        sessionId={selectedSession?.id ?? null}
-        soundEnabled={soundEnabled}
-        onSoundToggle={onSoundToggle}
-        onClose={() => {
-          setSettingsOpen(false);
-          setModelsRefreshKey((key) => key + 1);
+    {switcherOpen && (
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={translate("workspace.switcherTitle")}
+        onClick={() => setSwitcherOpen(false)}
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 80,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 24,
+          background: "rgba(0,0,0,0.32)",
         }}
-        onModelsClosed={() => setModelsRefreshKey((key) => key + 1)}
-        onPluginsReloaded={() => setSessionKey((key) => key + 1)}
-      />
+      >
+        <div
+          onClick={(event) => event.stopPropagation()}
+          style={{
+            width: "min(880px, 100%)",
+            maxHeight: "min(80vh, 720px)",
+            overflow: "auto",
+            background: "var(--bg-panel)",
+            border: "1px solid var(--border)",
+            borderRadius: 12,
+            boxShadow: "0 8px 28px rgba(0,0,0,0.12)",
+          }}
+        >
+          {picker}
+        </div>
+      </div>
     )}
+    {workspaceOverlays}
     {projectTrustDialogOpen && projectTrustCwd && (
       <ProjectTrustDialog
         cwd={projectTrustCwd}

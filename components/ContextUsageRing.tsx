@@ -83,7 +83,7 @@ export function ContextUsageRing({
           <span style={{ display: "block", fontSize: 18, fontWeight: 650, letterSpacing: "-0.03em", lineHeight: 1.2 }}>
             {percentText}
           </span>
-          <span style={{ display: "block", marginTop: 4, fontSize: 11, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
+          <span style={{ display: "block", marginTop: 4, fontSize: 12, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
             {usedLabel}
           </span>
         </span>

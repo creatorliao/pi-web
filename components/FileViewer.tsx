@@ -80,7 +80,7 @@ const FILE_LINE_NUMBER_STYLE: CSSProperties = {
   background: "var(--bg-panel)",
   borderRight: "1px solid var(--border)",
   fontFamily: "var(--font-mono)",
-  fontSize: 11,
+  fontSize: 12,
   fontStyle: "normal",
   fontVariantNumeric: "tabular-nums",
   lineHeight: "20.8px",

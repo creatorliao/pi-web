@@ -49,6 +49,7 @@ export function SettingsDialog({
   onClose,
   onModelsClosed,
   onPluginsReloaded,
+  initialSection,
 }: {
   cwd: string | null;
   sessionId: string | null;
@@ -57,6 +58,8 @@ export function SettingsDialog({
   onClose: () => void;
   onModelsClosed: () => void;
   onPluginsReloaded: () => void;
+  /** 欢迎页「去设置添加模型」直达模型分栏，不新开路由。 */
+  initialSection?: SettingsSection;
 }) {
   const isMobile = useIsMobile();
   const { t, locale, setLocale, supportedLocales } = useI18n();
@@ -65,6 +68,7 @@ export function SettingsDialog({
   const { showHiddenFiles, setShowHiddenFiles } = useExplorerVisibility();
   const hasProject = Boolean(cwd);
   const [section, setSection] = useState<SettingsSection>(() => {
+    if (initialSection) return initialSection;
     const stored = readStoredSection();
     // 无项目时不能停在技能 / 插件，否则一打开就是空禁用页。
     if (!cwd && (stored === "skills" || stored === "plugins")) return "appearance";

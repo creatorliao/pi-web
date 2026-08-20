@@ -2,18 +2,18 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const source = await readFile(new URL("./SessionSidebar.tsx", import.meta.url), "utf8");
-const customPathStart = source.indexOf("const commitCustomPath = useCallback");
-const customPathEnd = source.indexOf("const handleCustomPathClick", customPathStart);
-const customPathSource = source.slice(customPathStart, customPathEnd);
+const shell = await readFile(new URL("./AppShell.tsx", import.meta.url), "utf8");
+const browseStart = shell.indexOf("const handleBrowseSelect = useCallback");
+const browseEnd = shell.indexOf("}, [enterWorkspace]);", browseStart);
+const browseSource = shell.slice(browseStart, browseEnd);
 
 test("custom cwd selection installs validated identity before changing cwd", () => {
-  assert.notEqual(customPathStart, -1);
-  assert.notEqual(customPathEnd, -1);
-  assert.match(customPathSource, /projectRoot\?: string;[\s\S]*?projectKey\?: string;/);
+  assert.notEqual(browseStart, -1);
+  assert.ok(browseEnd > browseStart);
+  assert.match(browseSource, /projectRoot\?: string;[\s\S]*?projectKey\?: string;/);
 
-  const identityUpdate = customPathSource.indexOf("setValidatedProject(");
-  const cwdUpdate = customPathSource.indexOf("setSelectedCwd(");
-  assert.ok(identityUpdate >= 0, "validated project identity is retained");
-  assert.ok(cwdUpdate > identityUpdate, "identity is retained before cwd changes");
+  assert.match(
+    browseSource,
+    /enterWorkspace\(data\.cwd, data\.projectKey \?\? data\.projectRoot \?\? data\.cwd\)/,
+  );
 });
