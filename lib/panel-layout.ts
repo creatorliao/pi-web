@@ -1,7 +1,7 @@
 export const MOBILE_MAX_WIDTH = 640;
 export const SPLIT_PANEL_MIN_WIDTH = 960;
 
-/** 目录树出厂宽：够项目名+一层路径，不抢中间文件。 */
+/** 左右侧栏出厂同宽：初次进入两边对齐，之后各栏可单独拖。 */
 export const SIDEBAR_DEFAULT_WIDTH = 240;
 export const SIDEBAR_MIN_WIDTH = 200;
 export const SIDEBAR_MAX_WIDTH = 360;
@@ -14,7 +14,7 @@ export const RIGHT_PANEL_MAX_WIDTH = 560;
 /** 历史已关且再往右压，指针低于此值则整栏收起。 */
 export const RIGHT_PANEL_SNAP_COLLAPSE = 240;
 
-export const HISTORY_DEFAULT_WIDTH = 240;
+export const HISTORY_DEFAULT_WIDTH = SIDEBAR_DEFAULT_WIDTH;
 export const HISTORY_MIN_WIDTH = 180;
 export const HISTORY_MAX_WIDTH = 360;
 

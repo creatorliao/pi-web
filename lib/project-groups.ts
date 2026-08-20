@@ -26,6 +26,8 @@ export function getRecentProjects(sessions: readonly SessionInfo[]): RecentProje
   for (const session of sessions) {
     const root = session.projectRoot ?? session.cwd;
     if (!root) continue;
+    // 本机目录树里已经没了的文件夹不进选择器（F-12）；未标则兼容旧数据。
+    if (session.directoryExists === false) continue;
     const key = workspaceKeyOf(session);
     const previous = latestByProject.get(key);
     if (!previous || session.modified > previous.modified) {
@@ -87,4 +89,21 @@ export function toWorkspaceCards(
       lastModified,
     };
   });
+}
+
+/**
+ * 选择器展示序：去掉隐藏 → 星标组（保持最近序）→ 其余（保持最近序）。
+ * 不另按点星时间排。
+ */
+export function arrangeWorkspaceCards(
+  cards: readonly WorkspaceCard[],
+  prefs: { starredKeys: readonly string[]; hiddenKeys: readonly string[] },
+): WorkspaceCard[] {
+  const hidden = new Set(prefs.hiddenKeys);
+  const starred = new Set(prefs.starredKeys);
+  const visible = cards.filter((card) => !hidden.has(card.key));
+  return [
+    ...visible.filter((card) => starred.has(card.key)),
+    ...visible.filter((card) => !starred.has(card.key)),
+  ];
 }

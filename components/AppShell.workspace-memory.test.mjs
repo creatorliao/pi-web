@@ -40,3 +40,17 @@ test("workspace restoration remains inside the cross-project branch", () => {
     /if \(currentProject !== newProject\) \{[\s\S]*?restoreWorkspaceContext\(newProject\);[\s\S]*?\}/,
   );
 });
+
+test("workspace restore asks the session list even without a remembered id", () => {
+  const body = callbackBody("restoreWorkspaceContext", "handleCwdChange");
+  assert.match(body, /pickWorkspaceSessionToRestore/);
+  assert.doesNotMatch(body, /if \(!lastOpenSessionId\) return;/);
+});
+
+test("same-cwd key hydration does not invalidate an in-flight workspace restore", () => {
+  const body = callbackBody("handleCwdChange", "handleSelectSession");
+  const hydrateGuard = body.indexOf("if (currentFreshCwd === cwd && currentProject !== newProject)");
+  const invalidate = body.indexOf("invalidateWorkspaceRestore()");
+  assert.ok(hydrateGuard >= 0, "same-cwd hydration guard missing");
+  assert.ok(invalidate > hydrateGuard, "invalidate must run only after hydration guards");
+});

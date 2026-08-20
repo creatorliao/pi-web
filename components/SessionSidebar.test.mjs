@@ -76,6 +76,6 @@ test("portaled history list has search, new chat, and date groups", () => {
   assert.match(source, /groupRootsByDate/);
   assert.match(source, /HISTORY_BUCKET_DEFAULT_CAP/);
   assert.match(source, /data-history-more=/);
-  assert.match(source, /data-history-panel-toggle=/);
-  assert.match(source, /onToggleHistory/);
+  assert.doesNotMatch(source, /data-history-panel-toggle=/);
+  assert.doesNotMatch(source, /onToggleHistory/);
 });

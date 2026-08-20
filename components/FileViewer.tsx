@@ -33,6 +33,14 @@ import {
   type FileViewerDisplayMode as DisplayMode,
   type FileViewerState,
 } from "@/lib/file-viewer-state";
+import {
+  DEFAULT_FILE_VIEWER_FONT_SIZE,
+  FILE_VIEWER_FONT_SIZES,
+  readFileViewerFontSize,
+  stepFileViewerFontSize,
+  writeFileViewerFontSize,
+  type FileViewerFontSize,
+} from "@/lib/file-viewer-zoom";
 
 export type { FileViewerState } from "@/lib/file-viewer-state";
 
@@ -59,35 +67,39 @@ interface FileData {
   size: number;
 }
 
-const DISPLAY_MODE_LABELS: Record<DisplayMode, string> = {
-  source: "Source",
-  preview: "Preview",
-  diff: "Diff",
+const DISPLAY_MODE_I18N: Record<DisplayMode, "i18n.source" | "i18n.preview" | "i18n.diff"> = {
+  source: "i18n.source",
+  preview: "i18n.preview",
+  diff: "i18n.diff",
 };
 
-const FILE_CODE_STYLE: CSSProperties = {
-  fontFamily: "var(--font-mono)",
-  fontSize: 13,
-  lineHeight: 1.6,
-};
+function fileCodeStyle(fontSize: number): CSSProperties {
+  return {
+    fontFamily: "var(--font-mono)",
+    fontSize,
+    lineHeight: 1.6,
+  };
+}
 
-const FILE_LINE_NUMBER_STYLE: CSSProperties = {
-  width: 48,
-  minWidth: 48,
-  padding: "0 10px",
-  textAlign: "right",
-  color: "var(--text-dim)",
-  background: "var(--bg-panel)",
-  borderRight: "1px solid var(--border)",
-  fontFamily: "var(--font-mono)",
-  fontSize: 12,
-  fontStyle: "normal",
-  fontVariantNumeric: "tabular-nums",
-  lineHeight: "20.8px",
-  userSelect: "none",
-  flexShrink: 0,
-  verticalAlign: "top",
-};
+function fileLineNumberStyle(fontSize: number): CSSProperties {
+  return {
+    width: 48,
+    minWidth: 48,
+    padding: "0 10px",
+    textAlign: "right",
+    color: "var(--text-dim)",
+    background: "var(--bg-panel)",
+    borderRight: "1px solid var(--border)",
+    fontFamily: "var(--font-mono)",
+    fontSize: Math.max(11, fontSize - 1),
+    fontStyle: "normal",
+    fontVariantNumeric: "tabular-nums",
+    lineHeight: `${fontSize * 1.6}px`,
+    userSelect: "none",
+    flexShrink: 0,
+    verticalAlign: "top",
+  };
+}
 
 type SourceCodeRendererProps = Parameters<NonNullable<SyntaxHighlighterProps["renderer"]>>[0] & {
   wrapLines: boolean;
@@ -291,7 +303,7 @@ function diffLines(patch: string): DiffLine[] {
   }));
 }
 
-function DiffView({ patch }: { patch: string }) {
+function DiffView({ patch, fontSize }: { patch: string; fontSize: number }) {
   const { t } = useI18n();
   const diff = diffLines(patch);
 
@@ -340,7 +352,7 @@ function DiffView({ patch }: { patch: string }) {
       style={{
         width: "max-content",
         minWidth: "100%",
-        ...FILE_CODE_STYLE,
+        ...fileCodeStyle(fontSize),
       }}
     >
       {segments.map((seg, si) => {
@@ -390,7 +402,7 @@ function DiffView({ patch }: { patch: string }) {
               }}
             >
               <span
-                style={FILE_LINE_NUMBER_STYLE}
+                style={fileLineNumberStyle(fontSize)}
               >
                 {line.type === "removed" ? line.oldLineNo : line.newLineNo}
               </span>
@@ -476,8 +488,6 @@ function FileViewerStatusBar({
 }
 
 function ImageViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Props) {
-  const { t } = useI18n();
-  const [watching, setWatching] = useState(false);
   const [bust, setBust] = useState(0);
   const [size, setSize] = useState<number | null>(null);
   const [naturalSize, setNaturalSize] = useState<{ w: number; h: number } | null>(null);
@@ -490,12 +500,9 @@ function ImageViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
     setSize(null);
     setNaturalSize(null);
     setError(null);
-    setWatching(false);
   }, [filePath, sourceSessionId]);
 
   useEffect(() => {
-    setWatching(false);
-
     if (esRef.current) {
       esRef.current.close();
       esRef.current = null;
@@ -528,7 +535,6 @@ function ImageViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
     esRef.current = es;
 
     es.addEventListener("connected", () => {
-      setWatching(true);
       synchronize();
     });
     es.addEventListener("change", (e) => {
@@ -541,11 +547,6 @@ function ImageViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
       setError(null);
       setBust((b) => b + 1);
     });
-    const markDisconnected = () => {
-      setWatching(false);
-    };
-    es.addEventListener("error", markDisconnected);
-    es.onerror = markDisconnected;
 
     return () => {
       active = false;
@@ -574,15 +575,6 @@ function ImageViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
           />
         )}
       >
-        <span
-          title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
-          aria-label={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
-          className="file-viewer-live-indicator"
-          style={{
-            background: watching ? "#4ade80" : "var(--border)",
-            boxShadow: watching ? "0 0 4px #4ade80" : "none",
-          }}
-        />
         <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />
       </FileViewerStatusBar>
       <div
@@ -636,8 +628,6 @@ function formatDuration(seconds: number): string {
 }
 
 function AudioViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Props) {
-  const { t } = useI18n();
-  const [watching, setWatching] = useState(false);
   const [bust, setBust] = useState(0);
   const [size, setSize] = useState<number | null>(null);
   const [duration, setDuration] = useState<number | null>(null);
@@ -650,12 +640,9 @@ function AudioViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
     setSize(null);
     setDuration(null);
     setError(null);
-    setWatching(false);
   }, [filePath, sourceSessionId]);
 
   useEffect(() => {
-    setWatching(false);
-
     if (esRef.current) {
       esRef.current.close();
       esRef.current = null;
@@ -688,7 +675,6 @@ function AudioViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
     esRef.current = es;
 
     es.addEventListener("connected", () => {
-      setWatching(true);
       synchronize();
     });
     es.addEventListener("change", (e) => {
@@ -701,11 +687,6 @@ function AudioViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
       setError(null);
       setBust((b) => b + 1);
     });
-    const markDisconnected = () => {
-      setWatching(false);
-    };
-    es.addEventListener("error", markDisconnected);
-    es.onerror = markDisconnected;
 
     return () => {
       active = false;
@@ -732,15 +713,6 @@ function AudioViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
           />
         )}
       >
-        <span
-          title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
-          aria-label={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
-          className="file-viewer-live-indicator"
-          style={{
-            background: watching ? "#4ade80" : "var(--border)",
-            boxShadow: watching ? "0 0 4px #4ade80" : "none",
-          }}
-        />
         <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />
       </FileViewerStatusBar>
       <div
@@ -776,7 +748,6 @@ function AudioViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
 
 function DocumentViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Props) {
   const { t } = useI18n();
-  const [watching, setWatching] = useState(false);
   const [bust, setBust] = useState(0);
   const [size, setSize] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -793,7 +764,6 @@ function DocumentViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }:
     setBust(0);
     setSize(null);
     setError(null);
-    setWatching(false);
 
     let active = true;
     const requestId = ++syncRequestRef.current;
@@ -819,8 +789,6 @@ function DocumentViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }:
   }, [filePath, isPdf, sourceSessionId]);
 
   useEffect(() => {
-    setWatching(false);
-
     if (esRef.current) {
       esRef.current.close();
       esRef.current = null;
@@ -858,7 +826,6 @@ function DocumentViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }:
     esRef.current = es;
 
     es.addEventListener("connected", () => {
-      setWatching(true);
       synchronize();
     });
     es.addEventListener("change", (e) => {
@@ -876,11 +843,6 @@ function DocumentViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }:
       setError(null);
       setBust((b) => b + 1);
     });
-    const markDisconnected = () => {
-      setWatching(false);
-    };
-    es.addEventListener("error", markDisconnected);
-    es.onerror = markDisconnected;
 
     return () => {
       active = false;
@@ -900,15 +862,6 @@ function DocumentViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }:
           />
         )}
       >
-        <span
-          title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
-          aria-label={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
-          className="file-viewer-live-indicator"
-          style={{
-            background: watching ? "#4ade80" : "var(--border)",
-            boxShadow: watching ? "0 0 4px #4ade80" : "none",
-          }}
-        />
         <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />
       </FileViewerStatusBar>
       <div style={{ flex: 1, minHeight: 0, background: "var(--bg-panel)" }}>
@@ -999,7 +952,7 @@ function TextFileViewer({
   const initialScrollTop = initialState?.scrollTop ?? 0;
   const initialScrollLeft = initialState?.scrollLeft ?? 0;
   const [displayMode, setDisplayMode] = useState<DisplayMode>(requestedInitialDisplayMode);
-  const [watching, setWatching] = useState(false);
+  const [fontSize, setFontSize] = useState<FileViewerFontSize>(readFileViewerFontSize);
   const esRef = useRef<EventSource | null>(null);
   const contentRequestRef = useRef(0);
   const gitDiffRequestRef = useRef(0);
@@ -1105,7 +1058,6 @@ function TextFileViewer({
     setData(null);
     setGitDiff(null);
     setGitDiffResolved(false);
-    setWatching(false);
 
     if (virtualContent !== undefined) {
       setData({
@@ -1130,8 +1082,6 @@ function TextFileViewer({
   }, [filePath, fetchContent, sourceSessionId, virtualContent]);
 
   useEffect(() => {
-    setWatching(false);
-
     if (esRef.current) {
       esRef.current.close();
       esRef.current = null;
@@ -1149,7 +1099,6 @@ function TextFileViewer({
     esRef.current = es;
 
     es.addEventListener("connected", () => {
-      setWatching(true);
       // The server emits connected only after its watcher exists. Reading now
       // closes the gap between the last snapshot and live events.
       synchronize();
@@ -1157,17 +1106,19 @@ function TextFileViewer({
 
     es.addEventListener("change", synchronize);
 
-    const markDisconnected = () => {
-      setWatching(false);
-    };
-    es.addEventListener("error", markDisconnected);
-    es.onerror = markDisconnected;
-
     return () => {
       es.close();
       if (esRef.current === es) esRef.current = null;
     };
   }, [filePath, fetchContent, fetchGitDiff, sourceSessionId, watchEnabled, virtualContent]);
+
+  const changeFontSize = useCallback((direction: 1 | -1) => {
+    setFontSize((current) => {
+      const next = stepFileViewerFontSize(current, direction);
+      writeFileViewerFontSize(next);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     if (virtualContent !== undefined) return;
@@ -1320,17 +1271,6 @@ function TextFileViewer({
   const isGenerated = virtualContent !== undefined || isVirtualFilePath(filePath);
   const toolbarControls = (
         <div className="file-viewer-controls" data-file-chrome-controls="">
-          {!isDeletedDiff && (
-            <span
-              title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
-              aria-label={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
-              className="file-viewer-live-indicator"
-              style={{
-                background: watching ? "#4ade80" : "var(--border)",
-                boxShadow: watching ? "0 0 4px #4ade80" : "none",
-              }}
-            />
-          )}
           {displayModes.length > 1 && (
             <div className="file-viewer-mode-switch" aria-label={t("i18n.fileViewMode")}>
               {displayModes.map((mode) => {
@@ -1348,12 +1288,40 @@ function TextFileViewer({
                       color: active ? "var(--text)" : "var(--text-muted)",
                     }}
                   >
-                    {DISPLAY_MODE_LABELS[mode]}
+                    {t(DISPLAY_MODE_I18N[mode])}
                   </button>
                 );
               })}
             </div>
           )}
+
+          <div className="file-viewer-zoom" aria-label={t("i18n.fileTextSize")}>
+            <button
+              type="button"
+              className="file-viewer-icon-button"
+              onClick={() => changeFontSize(-1)}
+              disabled={fontSize <= FILE_VIEWER_FONT_SIZES[0]}
+              title={t("i18n.zoomOut")}
+              aria-label={t("i18n.zoomOut")}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                <path d="M5 12h14" />
+              </svg>
+            </button>
+            <span className="file-viewer-zoom-value">{fontSize}</span>
+            <button
+              type="button"
+              className="file-viewer-icon-button"
+              onClick={() => changeFontSize(1)}
+              disabled={fontSize >= FILE_VIEWER_FONT_SIZES[FILE_VIEWER_FONT_SIZES.length - 1]}
+              title={t("i18n.zoomIn")}
+              aria-label={t("i18n.zoomIn")}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+            </button>
+          </div>
 
           <div className="file-viewer-actions">
             {(onAtMention || onMentionLines) && (
@@ -1389,7 +1357,17 @@ function TextFileViewer({
   );
 
   return (
-    <div className="file-viewer-shell" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+    <div
+      className="file-viewer-shell"
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        height: "100%",
+        overflow: "hidden",
+        // Markdown 预览用 em 跟档；源码/差异走下面的 fontSize。
+        "--file-viewer-text-size": `${fontSize + 2}px`,
+      } as CSSProperties}
+    >
       <FileViewerStatusBar
         meta={<FilePathStatusMeta filePath={filePath} cwd={cwd} generated={isGenerated} />}
       >
@@ -1407,12 +1385,18 @@ function TextFileViewer({
         style={{ flex: 1, overflowX: "hidden", overflowY: "auto", background: "var(--bg)" }}
       >
         {effectiveDisplayMode === "diff" && hasGitDiff ? (
-          <DiffView patch={gitDiff.patch!} />
+          <DiffView patch={gitDiff.patch!} fontSize={fontSize} />
         ) : isHtml && effectiveDisplayMode === "preview" ? (
           <iframe
             srcDoc={content}
             sandbox="allow-scripts"
-            style={{ width: "100%", height: "100%", border: "none", background: "var(--bg)" }}
+            style={{
+              width: "100%",
+              height: "100%",
+              border: "none",
+              background: "var(--bg)",
+              zoom: fontSize / DEFAULT_FILE_VIEWER_FONT_SIZE,
+            }}
              title={t("i18n.htmlPreview")}
           />
         ) : isMarkdown && effectiveDisplayMode === "preview" ? (
@@ -1488,14 +1472,14 @@ function TextFileViewer({
             style={isDark ? vscDarkPlus : vs}
             showLineNumbers
             lineNumberStyle={{
-              ...FILE_LINE_NUMBER_STYLE,
+              ...fileLineNumberStyle(fontSize),
             }}
             customStyle={{
               margin: 0,
               padding: 0,
               border: 0,
               background: "var(--bg)",
-              ...FILE_CODE_STYLE,
+              ...fileCodeStyle(fontSize),
               width: "100%",
               minWidth: 0,
               maxWidth: "100%",

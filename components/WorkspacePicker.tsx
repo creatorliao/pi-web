@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type KeyboardEvent } from "react";
+import { useMemo, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { PathLabel } from "@/components/PathLabel";
 import { formatRelativeTime } from "@/lib/i18n/format";
 import type { WorkspaceCard } from "@/lib/project-groups";
@@ -12,11 +12,16 @@ export type ModelsReady = boolean | "unknown";
 interface Props {
   host: WorkspacePickerHost;
   projects: WorkspaceCard[];
+  starredKeys: readonly string[];
+  hiddenCount: number;
   loading: boolean;
   error: string | null;
   currentKey?: string | null;
   modelsReady: ModelsReady;
   onSelect: (project: WorkspaceCard) => void;
+  onStar: (project: WorkspaceCard) => void;
+  onHide: (project: WorkspaceCard) => void;
+  onResetHidden: () => void;
   onBrowse: () => void;
   onDefaultCwd: () => void;
   onRetry: () => void;
@@ -31,11 +36,16 @@ interface Props {
 export function WorkspacePicker({
   host,
   projects,
+  starredKeys,
+  hiddenCount,
   loading,
   error,
   currentKey = null,
   modelsReady,
   onSelect,
+  onStar,
+  onHide,
+  onResetHidden,
   onBrowse,
   onDefaultCwd,
   onRetry,
@@ -44,6 +54,7 @@ export function WorkspacePicker({
 }: Props) {
   const { t, locale } = useI18n();
   const [filter, setFilter] = useState("");
+  const starred = useMemo(() => new Set(starredKeys), [starredKeys]);
   const showFilter = projects.length > 8;
   const query = filter.trim().toLowerCase();
   const visible = useMemo(() => {
@@ -58,12 +69,56 @@ export function WorkspacePicker({
   const title = host === "modal" ? t("workspace.switcherTitle") : t("workspace.pickerTitle");
   const showAddModel = modelsReady === false && Boolean(onAddModels);
 
-  const handleCardKeyDown = (event: KeyboardEvent<HTMLButtonElement>, project: WorkspaceCard) => {
-    if (event.key === "Enter") {
+  const handleCardKeyDown = (event: KeyboardEvent<HTMLDivElement>, project: WorkspaceCard) => {
+    if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       onSelect(project);
     }
   };
+
+  const stopCard = (event: MouseEvent, run: () => void) => {
+    event.stopPropagation();
+    event.preventDefault();
+    run();
+  };
+
+  const openActions = (
+    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14, flexShrink: 0 }}>
+      {hiddenCount > 0 && (
+        <button type="button" className="workspace-text-btn" onClick={onResetHidden}>
+          {t("workspace.resetHidden")}
+        </button>
+      )}
+      <button type="button" className="workspace-text-btn" onClick={onBrowse}>
+        {t("workspace.openFolder")}
+      </button>
+      <button type="button" className="workspace-text-btn" onClick={onDefaultCwd}>
+        {t("workspace.useTodayDir")}
+      </button>
+      {host === "modal" && onClose && (
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={t("workspace.closeSwitcher")}
+          title={t("workspace.closeSwitcher")}
+          style={{
+            width: 28,
+            height: 28,
+            border: "1px solid var(--border)",
+            borderRadius: 4,
+            background: "var(--bg)",
+            color: "var(--text-muted)",
+            cursor: "pointer",
+            fontFamily: "var(--font-ui)",
+            fontSize: 16,
+            lineHeight: 1,
+          }}
+        >
+          ×
+        </button>
+      )}
+    </div>
+  );
 
   return (
     <div
@@ -77,15 +132,24 @@ export function WorkspacePicker({
     >
       {host === "welcome" && (
         <div style={{
-          fontFamily: "var(--font-ui)",
-          fontSize: 13,
-          fontWeight: 500,
-          color: "var(--text-dim)",
-          letterSpacing: "0.02em",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 16,
           marginBottom: 20,
         }}
         >
-          {t("workspace.productName")}
+          <div style={{
+            fontFamily: "var(--font-ui)",
+            fontSize: 13,
+            fontWeight: 500,
+            color: "var(--text-dim)",
+            letterSpacing: "0.02em",
+          }}
+          >
+            {t("workspace.productName")}
+          </div>
+          {openActions}
         </div>
       )}
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
@@ -113,29 +177,7 @@ export function WorkspacePicker({
             </p>
           )}
         </div>
-        {host === "modal" && onClose && (
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={t("workspace.closeSwitcher")}
-            title={t("workspace.closeSwitcher")}
-            style={{
-              flexShrink: 0,
-              width: 32,
-              height: 32,
-              border: "1px solid var(--border)",
-              borderRadius: 8,
-              background: "var(--bg)",
-              color: "var(--text-muted)",
-              cursor: "pointer",
-              fontFamily: "var(--font-ui)",
-              fontSize: 16,
-              lineHeight: 1,
-            }}
-          >
-            ×
-          </button>
-        )}
+        {host === "modal" && openActions}
       </div>
 
       {showFilter && !loading && !error && (
@@ -146,10 +188,10 @@ export function WorkspacePicker({
           style={{
             width: "100%",
             marginTop: 16,
-            height: 36,
-            padding: "0 12px",
+            height: 32,
+            padding: "0 10px",
             border: "1px solid var(--border)",
-            borderRadius: 8,
+            borderRadius: 4,
             outline: "none",
             background: "var(--bg)",
             color: "var(--text)",
@@ -164,20 +206,7 @@ export function WorkspacePicker({
         {error ? (
           <div role="alert" style={{ color: "var(--text)", fontFamily: "var(--font-ui)", fontSize: 14 }}>
             <div>{t("workspace.loadFailed")}</div>
-            <button
-              type="button"
-              onClick={onRetry}
-              style={{
-                marginTop: 12,
-                padding: 0,
-                border: "none",
-                background: "none",
-                color: "var(--accent)",
-                cursor: "pointer",
-                fontFamily: "var(--font-ui)",
-                fontSize: 14,
-              }}
-            >
+            <button type="button" onClick={onRetry} className="workspace-text-btn" style={{ marginTop: 12, color: "var(--accent)" }}>
               {t("workspace.retry")}
             </button>
           </div>
@@ -195,7 +224,7 @@ export function WorkspacePicker({
                 key={index}
                 style={{
                   height: 96,
-                  borderRadius: 10,
+                  borderRadius: 4,
                   background: "var(--bg-hover)",
                 }}
               />
@@ -215,6 +244,7 @@ export function WorkspacePicker({
           >
             {visible.map((project) => {
               const isCurrent = host === "modal" && currentKey === project.key;
+              const isStarred = starred.has(project.key);
               const footer = project.sessionCount === 0
                 ? t("workspace.noSessions")
                 : t("workspace.sessionCount", { n: project.sessionCount });
@@ -222,9 +252,11 @@ export function WorkspacePicker({
                 ? formatRelativeTime(project.lastModified, locale)
                 : "";
               return (
-                <button
+                <div
                   key={project.key}
-                  type="button"
+                  className="workspace-card"
+                  role="button"
+                  tabIndex={0}
                   onClick={() => onSelect(project)}
                   onKeyDown={(event) => handleCardKeyDown(event, project)}
                   title={project.root}
@@ -234,9 +266,10 @@ export function WorkspacePicker({
                     alignItems: "stretch",
                     gap: 6,
                     minHeight: 96,
-                    padding: 14,
-                    border: isCurrent ? "1px solid var(--accent)" : "1px solid var(--border)",
-                    borderRadius: 10,
+                    padding: "12px 14px",
+                    border: "1px solid var(--border)",
+                    borderLeft: isCurrent ? "2px solid var(--accent)" : "1px solid var(--border)",
+                    borderRadius: 4,
                     background: "var(--bg)",
                     color: "var(--text)",
                     cursor: "pointer",
@@ -263,12 +296,32 @@ export function WorkspacePicker({
                         flexShrink: 0,
                         fontFamily: "var(--font-ui)",
                         fontSize: 11,
-                        color: "var(--accent)",
+                        color: "var(--text-dim)",
                       }}
                       >
                         {t("workspace.current")}
                       </span>
                     )}
+                    <div className="workspace-card-actions">
+                      <button
+                        type="button"
+                        className={`workspace-card-icon-btn workspace-card-star${isStarred ? " is-on" : ""}`}
+                        title={isStarred ? t("workspace.unstar") : t("workspace.star")}
+                        aria-label={isStarred ? t("workspace.unstar") : t("workspace.star")}
+                        onClick={(event) => stopCard(event, () => onStar(project))}
+                      >
+                        {isStarred ? "★" : "☆"}
+                      </button>
+                      <button
+                        type="button"
+                        className="workspace-card-icon-btn workspace-card-hide"
+                        title={t("workspace.hide")}
+                        aria-label={t("workspace.hide")}
+                        onClick={(event) => stopCard(event, () => onHide(project))}
+                      >
+                        ×
+                      </button>
+                    </div>
                   </div>
                   <PathLabel
                     text={project.shortPath}
@@ -287,51 +340,19 @@ export function WorkspacePicker({
                   >
                     {relative ? `${relative} · ${footer}` : footer}
                   </div>
-                </button>
+                </div>
               );
             })}
           </div>
         )}
       </div>
 
-      <div style={{
-        display: "flex",
-        flexWrap: "wrap",
-        gap: 16,
-        marginTop: 24,
-      }}
-      >
-        <button
-          type="button"
-          onClick={onBrowse}
-          style={secondaryButtonStyle}
-        >
-          {t("workspace.openFolder")}
-        </button>
-        <button
-          type="button"
-          onClick={onDefaultCwd}
-          style={secondaryButtonStyle}
-        >
-          {t("workspace.useTodayDir")}
-        </button>
-      </div>
-
       {showAddModel && (
         <button
           type="button"
           onClick={onAddModels}
-          style={{
-            display: "block",
-            marginTop: 20,
-            padding: 0,
-            border: "none",
-            background: "none",
-            color: "var(--text-muted)",
-            cursor: "pointer",
-            fontFamily: "var(--font-ui)",
-            fontSize: 13,
-          }}
+          className="workspace-text-btn"
+          style={{ display: "block", marginTop: 20 }}
         >
           {t("workspace.addModel")}
         </button>
@@ -339,13 +360,3 @@ export function WorkspacePicker({
     </div>
   );
 }
-
-const secondaryButtonStyle = {
-  padding: 0,
-  border: "none",
-  background: "none",
-  color: "var(--text-muted)",
-  cursor: "pointer",
-  fontFamily: "var(--font-ui)",
-  fontSize: 14,
-} as const;

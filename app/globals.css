@@ -902,6 +902,27 @@ pre, code {
   }
 }
 
+/* 无历史 / 新建：和有消息时一样，输入钉在底部；宽度交给 ChatInput 自己的 820 */
+.chat-empty-composer {
+  min-height: 0;
+  width: 100%;
+  padding-top: 16px;
+}
+
+.chat-empty-composer-brand {
+  flex: 0 0 auto;
+}
+
+.chat-empty-composer-spacer {
+  flex: 1 1 auto;
+  min-height: 24px;
+}
+
+.chat-empty-composer-inner {
+  flex: 0 0 auto;
+  width: 100%;
+}
+
 /* File viewer toolbar */
 .file-viewer-toolbar {
   min-width: 0;
@@ -995,13 +1016,6 @@ pre, code {
   white-space: nowrap;
 }
 
-.file-viewer-live-indicator {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex: 0 0 7px;
-}
-
 .file-viewer-controls {
   display: flex;
   align-items: center;
@@ -1050,6 +1064,21 @@ pre, code {
 
 .file-viewer-mode-button:hover {
   filter: brightness(1.08);
+}
+
+.file-viewer-zoom {
+  display: flex;
+  align-items: center;
+  height: 24px;
+  gap: 2px;
+}
+
+.file-viewer-zoom-value {
+  min-width: 22px;
+  text-align: center;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
 }
 
 .file-viewer-icon-button {
@@ -1123,12 +1152,16 @@ pre, code {
   display: none;
 }
 
-/* 历史抽屉宽只走 CSS 变量，避免 React 重绘把拖拽中的宽度写回去。 */
+/* 历史抽屉宽只走 CSS 变量；min/max 一起锁，避免 flex 被「新对话」按钮撑得比左栏宽。 */
 [data-agent-history-drawer] {
   width: 0;
+  min-width: 0;
+  max-width: 0;
 }
 [data-agent-history-drawer][data-agent-history-open] {
   width: var(--agent-history-width, 240px);
+  min-width: var(--agent-history-width, 240px);
+  max-width: var(--agent-history-width, 240px);
 }
 
 .file-viewer-icon-button:disabled:hover {
@@ -1165,6 +1198,10 @@ pre, code {
 }
 
 /* File viewer markdown preview — larger headings */
+.markdown-file-preview {
+  font-size: var(--file-viewer-text-size, 15px);
+}
+
 .markdown-file-preview h1 { font-size: 1.8em; }
 .markdown-file-preview h2 { font-size: 1.4em; }
 .markdown-file-preview h3 { font-size: 1.15em; }
@@ -1407,6 +1444,24 @@ span.token.table {
   .sidebar-container.sidebar-resizing,
   .sidebar-container.sidebar-resizing > * {
     transition: none !important;
+  }
+}
+
+/* 编辑器无页签：辅栏（对话）铺满侧栏右侧，不留空中槽。 */
+@media (min-width: 641px) {
+  .right-panel-container.right-panel-fill {
+    position: relative;
+    z-index: auto;
+    flex: 1 1 auto;
+    width: auto !important;
+    min-width: 0 !important;
+    transform: none !important;
+    box-shadow: none;
+  }
+
+  .right-panel-container.right-panel-fill > * {
+    width: 100% !important;
+    min-width: 0 !important;
   }
 }
 
@@ -1704,4 +1759,51 @@ span.token.table {
   .app-statusbar-item-text {
     display: none;
   }
+}
+
+/* 工作空间卡片：悬停才露出操作；已星标的星一直在。 */
+.workspace-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.workspace-card-star,
+.workspace-card-hide {
+  opacity: 0;
+}
+.workspace-card-star.is-on,
+.workspace-card:hover .workspace-card-star,
+.workspace-card:hover .workspace-card-hide,
+.workspace-card:focus-within .workspace-card-star,
+.workspace-card:focus-within .workspace-card-hide {
+  opacity: 1;
+}
+.workspace-card-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.workspace-card-icon-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.workspace-text-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 13px;
+}
+.workspace-text-btn:hover {
+  color: var(--text);
 }

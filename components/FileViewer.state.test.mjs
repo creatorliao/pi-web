@@ -36,6 +36,26 @@ for (const [name, nextName] of [
   });
 }
 
+for (const name of ["ImageViewer", "AudioViewer", "DocumentViewer"]) {
+  test(`${name} no longer paints a live-sync status dot`, () => {
+    const nextName = name === "ImageViewer"
+      ? "formatDuration"
+      : name === "AudioViewer"
+        ? "DocumentViewer"
+        : "FileViewer";
+    assert.doesNotMatch(functionBlock(name, nextName), /file-viewer-live-indicator/);
+  });
+}
+
+test("TextFileViewer uses localized mode labels and has no live-sync dot", () => {
+  const block = functionBlock("TextFileViewer", null);
+  assert.doesNotMatch(block, /file-viewer-live-indicator/);
+  assert.doesNotMatch(block, /DISPLAY_MODE_LABELS/);
+  assert.match(block, /t\(DISPLAY_MODE_I18N\[mode\]\)/);
+  assert.match(block, /file-viewer-zoom/);
+  assert.match(block, /changeFontSize/);
+});
+
 test("TextFileViewer no longer paints a stacked file-name title", () => {
   const block = functionBlock("TextFileViewer", null);
   assert.doesNotMatch(block, /file-viewer-path/);

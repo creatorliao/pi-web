@@ -20,6 +20,7 @@ test("session listing merges live registry snapshots and honors force refresh", 
   assert.match(listRoute, /listAllSessions\(\{ force \}\)/);
   assert.match(listRoute, /attachSessionProjectInfo\(getRpcSessionInfos\(\)\)/);
   assert.match(listRoute, /mergeSessionLists\(persistedSessions, runtimeSessions\)/);
+  assert.match(listRoute, /annotateSessionDirectoryExists/);
   assert.match(listRoute, /"Cache-Control": "no-store"/);
 });
 

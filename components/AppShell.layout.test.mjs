@@ -5,6 +5,15 @@ import test from "node:test";
 const source = await readFile(new URL("./AppShell.tsx", import.meta.url), "utf8");
 const chatWindow = await readFile(new URL("./ChatWindow.tsx", import.meta.url), "utf8");
 const chatInput = await readFile(new URL("./ChatInput.tsx", import.meta.url), "utf8");
+const cssSource = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+
+test("opening a session expands the history drawer on desktop", () => {
+  assert.match(
+    source,
+    /if \(!selectedSession \|\| isMobile\) return;\s*setAgentHistoryOpen\(true\);/,
+  );
+  assert.match(source, /\[isMobile, selectedSession\?\.id\]/);
+});
 
 test("desktop editor layout puts files in the main column and chat in the aux panel", () => {
   assert.match(source, /const isEditorLayout = !isMobile && layoutMode === "editor"/);
@@ -12,6 +21,26 @@ test("desktop editor layout puts files in the main column and chat in the aux pa
   assert.match(source, /isEditorLayout \? agentWorkspace : fileWorkspace/);
   assert.match(source, /data-workspace="files"/);
   assert.match(source, /data-workspace="agent"/);
+});
+
+test("editor layout without file tabs expands chat instead of keeping an empty center", () => {
+  assert.match(source, /const editorChatExpanded = isEditorLayout && fileTabs\.length === 0/);
+  assert.match(source, /const editorChatFills = editorChatExpanded && rightPanelOpen/);
+  assert.match(source, /data-editor-main-column=\{editorChatFills \? "collapsed" : "open"\}/);
+  assert.match(source, /right-panel-fill/);
+  assert.match(source, /data-editor-chat-expanded=\{editorChatFills \? "" : undefined\}/);
+  assert.match(source, /rightPanelOpen && !editorChatFills/);
+});
+
+test("sidebar rail toggles stay available after the empty editor column hides", () => {
+  assert.match(source, /data-workspace-sidebar-toggle=""/);
+  assert.match(source, /editorChatExpanded && renderLeftSidebarToggle\(\)/);
+  assert.match(source, /data-collapse-right-panel-on-chat=""/);
+  assert.match(source, /<line x1="9" y1="3" x2="9" y2="21" \/>/);
+  assert.doesNotMatch(
+    source,
+    /sidebarOpen \? \(\s*<svg[\s\S]*?<line x1="3" y1="6"/,
+  );
 });
 
 test("session list is portaled into the agent block on desktop only", () => {
@@ -28,7 +57,8 @@ test("desktop chat entry uses a push drawer and tab-bar icons stay off the file 
   assert.match(source, /data-workspace-new-chat-collapsed=/);
   assert.match(source, /data-agent-chrome=""/);
   assert.match(source, /data-agent-column=/);
-  assert.match(source, /showHistoryToggle: !agentHistoryOpen/);
+  assert.match(source, /showHistoryToggle \?\? true/);
+  assert.doesNotMatch(source, /showHistoryToggle: !agentHistoryOpen/);
   assert.match(source, /data-agent-history-drawer=""/);
   assert.doesNotMatch(source, /data-file-chrome=""/);
   assert.match(source, /data-file-tab-strip=""/);
@@ -54,6 +84,15 @@ test("desktop chat entry uses a push drawer and tab-bar icons stay off the file 
 test("history drawer chrome and collapsed new-chat live in the shell", () => {
   assert.match(source, /includeCollapse && !rightPanelOpen/);
   assert.match(source, /startNewConversation/);
+});
+
+test("first-visit history rail follows the file rail default width", () => {
+  assert.match(source, /getDefaultWidth: getDefaultHistoryWidth/);
+  assert.match(source, /sidebarWidthRef\.current \|\| SIDEBAR_DEFAULT_WIDTH/);
+  assert.match(
+    cssSource,
+    /\[data-agent-history-drawer\]\[data-agent-history-open\] \{[\s\S]*?min-width: var\(--agent-history-width, 240px\);/,
+  );
 });
 
 test("desktop chat no longer mounts ChatMinimap hover preview", () => {

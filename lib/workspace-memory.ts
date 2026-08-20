@@ -96,3 +96,48 @@ export function workspaceKeyOf(session: {
 }): string {
   return session.projectKey ?? session.projectRoot ?? session.cwd;
 }
+
+export interface WorkspaceRestoreCandidate {
+  id: string;
+  cwd: string;
+  modified: string;
+  projectRoot?: string | null;
+  projectKey?: string | null;
+}
+
+/**
+ * 进入工作区时要打开哪一条对话。
+ * 记忆仍在该工作区 → 用记忆；否则用 modified 最新；没有会话 → null（空输入态）。
+ * 「没有」指磁盘上没有历史，不是浏览器没记住。
+ */
+/**
+ * 侧栏未加载完时可能用 cwd/projectRoot 当 key，会话上却是稳定 projectKey。
+ * 两种写法都算同一个工作区，否则有历史也会被当成空。
+ */
+export function sessionBelongsToWorkspace(
+  session: WorkspaceRestoreCandidate,
+  workspaceKey: string,
+): boolean {
+  if (!workspaceKey) return false;
+  // 不用 Node path：本文件跑在浏览器里。欢迎页用稳定 key，侧栏可能先报 cwd/root。
+  return workspaceKeyOf(session) === workspaceKey
+    || session.projectKey === workspaceKey
+    || session.projectRoot === workspaceKey
+    || session.cwd === workspaceKey;
+}
+
+export function pickWorkspaceSessionToRestore<T extends WorkspaceRestoreCandidate>(
+  sessions: T[],
+  projectKey: string,
+  rememberedId: string | null,
+): T | null {
+  const inWorkspace = sessions.filter((session) => sessionBelongsToWorkspace(session, projectKey));
+  if (inWorkspace.length === 0) return null;
+  if (rememberedId) {
+    const remembered = inWorkspace.find((session) => session.id === rememberedId);
+    if (remembered) return remembered;
+  }
+  return inWorkspace.reduce((latest, session) => (
+    session.modified.localeCompare(latest.modified) > 0 ? session : latest
+  ));
+}

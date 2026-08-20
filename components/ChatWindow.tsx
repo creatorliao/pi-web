@@ -686,10 +686,12 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
       </div>
 
       {isEmptyNew ? (
-        <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-8">
-          <div className="w-full max-w-[820px]">
+        <div
+          className="chat-empty-composer flex flex-1 flex-col"
+          data-chat-empty-composer=""
+        >
+          <div className="chat-empty-composer-brand w-full">
             <div
-              className="mb-3"
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -714,6 +716,9 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
                 </span>
               </div>
             </div>
+          </div>
+          <div className="chat-empty-composer-spacer" aria-hidden="true" />
+          <div className="chat-empty-composer-inner w-full">
             {chatInputElement}
             <ExtensionStatusBar statuses={extensionStatuses} widgets={extensionWidgets} />
           </div>

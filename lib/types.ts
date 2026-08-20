@@ -318,6 +318,11 @@ export interface SessionInfo {
   /** True while the runtime session exists only in memory and its JSONL file
    *  has not been created yet. Disk-backed actions must wait until this clears. */
   transient?: boolean;
+  /**
+   * 服务端探测：projectRoot ?? cwd 此刻是否仍是本机目录。
+   * false = 文件夹已删/已挪，选择器不画卡；未标则当存在（单测与旧客户端）。
+   */
+  directoryExists?: boolean;
 }
 
 export interface SessionContext {

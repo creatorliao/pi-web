@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect, useLayoutEffect, type CSSProperties } from "react";
+import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
@@ -13,7 +13,7 @@ import { SettingsDialog, type SettingsSection } from "./SettingsDialog";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { probeModelsReady, type ModelsReady } from "@/lib/models-ready";
-import { toWorkspaceCards, type WorkspaceCard } from "@/lib/project-groups";
+import { arrangeWorkspaceCards, toWorkspaceCards, type WorkspaceCard } from "@/lib/project-groups";
 import { AppStatusBar, type StatusWorktree } from "./AppStatusBar";
 import type { ToolPreset } from "@/lib/tool-presets";
 import { ProjectTrustDialog } from "./ProjectTrustDialog";
@@ -39,6 +39,7 @@ import { getInitialNavigation } from "@/lib/initial-navigation";
 import {
   clearLastOpen,
   getLastOpenSession,
+  pickWorkspaceSessionToRestore,
   setLastOpenSession,
   workspaceKeyOf,
 } from "@/lib/workspace-memory";
@@ -119,7 +120,7 @@ export function AppShell() {
   // 手机保持「中间对话」；桌面才按设置换槽。
   const isEditorLayout = !isMobile && layoutMode === "editor";
   const [sessionListHost, setSessionListHost] = useState<HTMLDivElement | null>(null);
-  // 默认收起：对齐 Cursor，先看当前对话，点侧栏图标再抽出列表。
+  // 有打开的对话时再展开历史；空会话先把位置留给输入。点开会话后打开，方便接着换。
   const [agentHistoryOpen, setAgentHistoryOpen] = useState(false);
   useViewportHeight();
   // Audio ownership lives here (not in ChatWindow) so the completion tone can
@@ -147,6 +148,10 @@ export function AppShell() {
   );
   const [initialCwdError, setInitialCwdError] = useState<string | null>(null);
   const [welcomeProjects, setWelcomeProjects] = useState<WorkspaceCard[]>([]);
+  const [workspacePrefs, setWorkspacePrefs] = useState<{ starred: { key: string }[]; hidden: { key: string }[] }>({
+    starred: [],
+    hidden: [],
+  });
   const [welcomeError, setWelcomeError] = useState<string | null>(null);
   const [modelsReady, setModelsReady] = useState<ModelsReady>("unknown");
   const [switcherOpen, setSwitcherOpen] = useState(false);
@@ -254,10 +259,15 @@ export function AppShell() {
       return "persist";
     },
   });
+  const getDefaultHistoryWidth = useCallback(
+    () => sidebarWidthRef.current || SIDEBAR_DEFAULT_WIDTH,
+    [],
+  );
   const historyResizer = useResizablePanel({
     ariaLabel: translate("layout.resizeHistory"),
     cssVariable: "--agent-history-width",
     defaultWidth: HISTORY_DEFAULT_WIDTH,
+    getDefaultWidth: getDefaultHistoryWidth,
     getMaxWidth: () => HISTORY_MAX_WIDTH,
     growthDirection: "left",
     maxWidth: HISTORY_MAX_WIDTH,
@@ -762,6 +772,12 @@ export function AppShell() {
     setLastOpenSession(projectKey, selectedSession.id);
   }, [selectedSession]);
 
+  // 打开某条对话时展开历史，方便接着换；只跟会话 id 走，人自己收起后不要被列表刷新再撑开。
+  useEffect(() => {
+    if (!selectedSession || isMobile) return;
+    setAgentHistoryOpen(true);
+  }, [isMobile, selectedSession?.id]);
+
   useEffect(() => {
     const requestedCwd = initialNavigation.requestedCwd;
     if (!requestedCwd) return;
@@ -807,22 +823,16 @@ export function AppShell() {
   const restoreWorkspaceContext = useCallback((projectKey: string) => {
     const token = ++workspaceRestoreTokenRef.current;
     const lastOpenSessionId = getLastOpenSession(projectKey);
-    if (!lastOpenSessionId) return;
+    // 有历史就必须打开一条：记忆优先，否则该工作区最近修改。
+    // 不能在「浏览器没记住」时直接 return，否则有对话的项目也会落到空输入框。
     void fetch("/api/sessions")
       .then((r) => (r.ok ? (r.json() as Promise<{ sessions: SessionInfo[] }>) : null))
       .then((d) => {
         if (token !== workspaceRestoreTokenRef.current) return; // stale switch
-        const s = d?.sessions.find((x) => x.id === lastOpenSessionId);
+        if (!d) return;
+        const s = pickWorkspaceSessionToRestore(d.sessions, projectKey, lastOpenSessionId);
         if (!s) {
-          // The list loaded but the remembered session is gone — forget it.
-          // When the list itself failed (d === null) keep the memory so a
-          // later switch retries the restore.
-          if (d) clearLastOpen(projectKey);
-          return;
-        }
-        if (workspaceKeyOf(s) !== projectKey) {
-          // Defensive: the remembered session drifted out of this workspace.
-          clearLastOpen(projectKey);
+          if (lastOpenSessionId) clearLastOpen(projectKey);
           return;
         }
         // Selecting the session must remount the chat with the session
@@ -845,7 +855,6 @@ export function AppShell() {
     projectRoot?: string | null,
     projectKey?: string | null,
   ) => {
-    invalidateWorkspaceRestore();
     const currentFreshCwd = newSessionCwd ?? activeCwd;
     setActiveCwd(cwd);
     // Skip if cwd is null (initial mount).
@@ -861,8 +870,9 @@ export function AppShell() {
       suppressCwdBumpRef.current = false;
       return;
     }
-    // The server may hydrate a normalized key after a custom cwd is already
-    // active. Updating identity for the exact same cwd is not a user switch.
+    // 侧栏稍后用 cwd 补稳定 key：同一目录，不是换项目。
+    // 绝不能在这里 invalidate——欢迎页刚触发的「按历史恢复」会被作废，
+    // 有对话的工作区就会落到空输入框。
     if (currentFreshCwd === cwd && currentProject !== newProject) return;
     // Existing sessions stay open when the worktree selector moves within the
     // same project. A fresh composer must remount when its effective cwd moves,
@@ -873,6 +883,7 @@ export function AppShell() {
     ) {
       return;
     }
+    invalidateWorkspaceRestore();
     // Close any session that belongs to a different project — it no longer
     // matches the selected project directory.
     const draftId = typeof crypto.randomUUID === "function"
@@ -896,13 +907,53 @@ export function AppShell() {
       // project must not linger. Same-project worktree switches keep them.
       setFileTabs([]);
       setActiveFileTabId(null);
-      setRightPanelOpen(false);
-      // Restore the workspace we switched to: its last open session, or keep
-      // the default welcome page when none is remembered.
+      // 编辑器无页签时对话在辅栏；关掉辅栏会连对话一起藏掉。
+      setRightPanelOpen(isEditorLayout);
+      // Restore the workspace we switched to: remembered session, else latest,
+      // else empty composer when this project has no history.
       restoreWorkspaceContext(newProject);
     }
     router.replace("/", { scroll: false });
-  }, [activeCwd, invalidateWorkspaceRestore, newSessionCwd, router, selectedSession, restoreWorkspaceContext]);
+  }, [activeCwd, invalidateWorkspaceRestore, isEditorLayout, newSessionCwd, router, selectedSession, restoreWorkspaceContext]);
+
+  const applyWorkspacePrefsPayload = useCallback((data: {
+    workspaces?: { starred?: { key: string }[]; hidden?: { key: string }[] };
+  }) => {
+    setWorkspacePrefs({
+      starred: data.workspaces?.starred ?? [],
+      hidden: data.workspaces?.hidden ?? [],
+    });
+  }, []);
+
+  const loadWorkspacePrefs = useCallback(async () => {
+    try {
+      const res = await fetch("/api/web-config", { cache: "no-store" });
+      if (!res.ok) return;
+      applyWorkspacePrefsPayload(await res.json() as {
+        workspaces?: { starred?: { key: string }[]; hidden?: { key: string }[] };
+      });
+    } catch {
+      // 选择器仍可用
+    }
+  }, [applyWorkspacePrefsPayload]);
+
+  const patchWorkspacePrefs = useCallback(async (body: { action: string; key?: string }) => {
+    const res = await fetch("/api/web-config", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json() as {
+      workspaces?: { starred?: { key: string }[]; hidden?: { key: string }[] };
+      error?: string;
+    };
+    if (!res.ok) {
+      showToast({ tone: "error", message: data.error ?? translate("workspace.unable") });
+      return null;
+    }
+    applyWorkspacePrefsPayload(data);
+    return data.workspaces ?? { starred: [], hidden: [] };
+  }, [applyWorkspacePrefsPayload, showToast, translate]);
 
   const loadWelcomeData = useCallback(async () => {
     setWelcomeError(null);
@@ -915,6 +966,7 @@ export function AppShell() {
       const [sessionsRes, homeRes] = await Promise.all([
         fetch("/api/sessions", { cache: "no-store" }),
         fetch("/api/home"),
+        loadWorkspacePrefs(),
       ]);
       if (!sessionsRes.ok) throw new Error(`HTTP ${sessionsRes.status}`);
       const sessionsData = await sessionsRes.json() as { sessions: SessionInfo[] };
@@ -932,7 +984,7 @@ export function AppShell() {
     }
     const ready = await probeModelsReady();
     setModelsReady(ready);
-  }, []);
+  }, [loadWorkspacePrefs]);
 
   useEffect(() => {
     if (workspacePhase === "welcome-loading") {
@@ -952,13 +1004,39 @@ export function AppShell() {
     }, 0);
   }, [handleCwdChange]);
 
-  const handlePickerSelect = useCallback((project: WorkspaceCard) => {
+  const handlePickerSelect = useCallback(async (project: WorkspaceCard) => {
     if (workspacePhase === "ready" && project.key === (activeProjectKeyRef.current ?? null)) {
       setSwitcherOpen(false);
       return;
     }
-    enterWorkspace(project.root, project.key);
-  }, [enterWorkspace, workspacePhase]);
+    // 卡片来自历史会话，目录可能已删；先校验再进，避免进半残 cwd 再被信任检查炸红屏。
+    try {
+      const res = await fetch("/api/cwd/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd: project.root }),
+      });
+      const data = await res.json() as {
+        cwd?: string;
+        projectRoot?: string;
+        projectKey?: string;
+        error?: string;
+      };
+      if (!res.ok || !data.cwd) {
+        showToast({
+          tone: "error",
+          message: translate("workspace.dirMissing"),
+        });
+        return;
+      }
+      enterWorkspace(data.cwd, data.projectKey ?? data.projectRoot ?? project.key);
+    } catch (error) {
+      showToast({
+        tone: "error",
+        message: error instanceof Error ? error.message : translate("workspace.unable"),
+      });
+    }
+  }, [enterWorkspace, showToast, translate, workspacePhase]);
 
   const handleDefaultCwdFromPicker = useCallback(async () => {
     try {
@@ -997,13 +1075,43 @@ export function AppShell() {
         return;
       }
       setBrowseOpen(false);
-      enterWorkspace(data.cwd, data.projectKey ?? data.projectRoot ?? data.cwd);
+      const projectKey = data.projectKey ?? data.projectRoot ?? data.cwd;
+      void patchWorkspacePrefs({ action: "unhide", key: projectKey });
+      enterWorkspace(data.cwd, projectKey);
     } catch (error) {
       setBrowseError(error instanceof Error ? error.message : String(error));
     } finally {
       setBrowseBusy(false);
     }
-  }, [enterWorkspace]);
+  }, [enterWorkspace, patchWorkspacePrefs]);
+
+  const pickerProjects = useMemo(() => arrangeWorkspaceCards(welcomeProjects, {
+    starredKeys: workspacePrefs.starred.map((item) => item.key),
+    hiddenKeys: workspacePrefs.hidden.map((item) => item.key),
+  }), [welcomeProjects, workspacePrefs]);
+
+  const handlePickerStar = useCallback((project: WorkspaceCard) => {
+    const starred = workspacePrefs.starred.some((item) => item.key === project.key);
+    void patchWorkspacePrefs({ action: starred ? "unstar" : "star", key: project.key });
+  }, [patchWorkspacePrefs, workspacePrefs.starred]);
+
+  const handlePickerHide = useCallback((project: WorkspaceCard) => {
+    void patchWorkspacePrefs({ action: "hide", key: project.key }).then((next) => {
+      if (next) showToast({ tone: "info", message: translate("workspace.hiddenToast") });
+    });
+  }, [patchWorkspacePrefs, showToast, translate]);
+
+  const handleResetHidden = useCallback(() => {
+    const count = workspacePrefs.hidden.length;
+    void patchWorkspacePrefs({ action: "resetHidden" }).then((next) => {
+      if (next) {
+        showToast({
+          tone: "success",
+          message: translate("workspace.resetHiddenToast", { n: count }),
+        });
+      }
+    });
+  }, [patchWorkspacePrefs, showToast, translate, workspacePrefs.hidden.length]);
 
   const statusCwd = selectedSession?.cwd ?? newSessionCwd ?? activeCwd;
 
@@ -1513,12 +1621,16 @@ export function AppShell() {
     })
       .then(async (response) => {
         const data = await response.json() as ProjectTrustStatus & { error?: string };
-        if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`);
+        if (!response.ok || data.error) {
+          // 目录已删是预期失败，不能抛错，否则开发态会红屏。
+          setProjectTrust(null);
+          return;
+        }
         setProjectTrust(data);
       })
       .catch((error) => {
         if (error instanceof DOMException && error.name === "AbortError") return;
-        console.error("Failed to load project trust:", error);
+        setProjectTrust(null);
       });
     return () => controller.abort();
   }, [projectTrustCwd]);
@@ -1547,6 +1659,10 @@ export function AppShell() {
   }, [projectTrustBusy, projectTrustCwd]);
 
   const activeFileTab = fileTabs.find((tab) => tab.id === activeFileTabId) ?? null;
+  // 编辑器无页签：不留空中槽。对话仍挂在辅栏，只把辅栏拉成主区，避免 ChatWindow 换父节点卸挂。
+  const editorChatExpanded = isEditorLayout && fileTabs.length === 0;
+  // 只有对话真的铺满时才藏空主栏。关对话栏时主栏必须回来，否则左右开合同一消失。
+  const editorChatFills = editorChatExpanded && rightPanelOpen;
   const activeCwdName = activeCwd ? getFileName(activeCwd) || activeCwd : null;
   const windowTitle = activeCwdName ? `${activeCwdName} - Pi Web` : "Pi Web";
 
@@ -1563,6 +1679,7 @@ export function AppShell() {
 
   useEffect(() => {
     if (!switcherOpen) return;
+    void loadWorkspacePrefs();
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
@@ -1570,7 +1687,7 @@ export function AppShell() {
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [switcherOpen]);
+  }, [loadWorkspacePrefs, switcherOpen]);
 
   const sidebarContent = (
     <>
@@ -1597,7 +1714,6 @@ export function AppShell() {
         onBackgroundTaskDone={handleBackgroundTaskDone}
         onRunningSessionIdsChange={handleRunningSessionIdsChange}
         sessionListPortalTarget={isMobile ? null : sessionListHost}
-        onToggleHistory={!isMobile ? toggleHistory : undefined}
         showHiddenFiles={showHiddenFiles}
       />
       <div style={{ padding: "8px", flexShrink: 0 }}>
@@ -2013,7 +2129,8 @@ export function AppShell() {
   const renderWorkspaceChatActions = (opts?: { pullRight?: boolean; includeTitle?: boolean; showHistoryToggle?: boolean }) => {
     const canStart = Boolean(activeCwd || selectedSession?.cwd);
     const includeTitle = opts?.includeTitle ?? true;
-    const showHistoryToggle = opts?.showHistoryToggle ?? !agentHistoryOpen;
+    // 列表开合只挂在对话顶栏；历史列开着时不要再在最右上角放一枚右轨。
+    const showHistoryToggle = opts?.showHistoryToggle ?? true;
     const iconButtonStyle = (active: boolean, enabled: boolean): CSSProperties => ({
       display: "flex",
       alignItems: "center",
@@ -2080,6 +2197,44 @@ export function AppShell() {
       </div>
     );
   };
+
+  /**
+   * 左侧目录开合：方框+左轨，和右侧对话栏开合对称。
+   * 开合都用同一枚图，不在收起后换成汉堡，免得人找不到回来的入口。
+   */
+  const renderLeftSidebarToggle = () => (
+    <button
+      type="button"
+      data-workspace-sidebar-toggle=""
+      onClick={handleSidebarToggle}
+      aria-controls="session-sidebar"
+      aria-expanded={sidebarOpen}
+      aria-pressed={sidebarOpen}
+      title={sidebarOpen ? translate("sidebar.hide") : translate("sidebar.show")}
+      aria-label={sidebarOpen ? translate("sidebar.hide") : translate("sidebar.show")}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: TOP_BAR_ICON_BUTTON_SIZE,
+        height: TOP_BAR_ICON_BUTTON_SIZE,
+        padding: 0,
+        background: sidebarOpen ? "var(--bg-selected)" : "none",
+        border: "none",
+        borderRight: "1px solid var(--border)",
+        color: sidebarOpen ? "var(--text)" : "var(--text-muted)",
+        cursor: "pointer",
+        flexShrink: 0,
+        transition: "color 0.12s, background 0.12s",
+      }}
+      onMouseEnter={(event) => { event.currentTarget.style.color = "var(--text)"; }}
+      onMouseLeave={(event) => { event.currentTarget.style.color = sidebarOpen ? "var(--text)" : "var(--text-muted)"; }}
+    >
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <rect x="3" y="3" width="18" height="18" rx="2" /><line x1="9" y1="3" x2="9" y2="21" />
+      </svg>
+    </button>
+  );
 
   const renderMainFileToggle = (mobile: boolean) => {
     const covered = mobile && mobileToolbarMoreOpen;
@@ -2282,7 +2437,13 @@ export function AppShell() {
               borderBottom: "1px solid var(--border)",
             }}
           >
-            {renderWorkspaceChatActions({ showHistoryToggle: !agentHistoryOpen })}
+            {editorChatExpanded && renderLeftSidebarToggle()}
+            {renderWorkspaceChatActions()}
+            {editorChatExpanded && (
+              <div data-collapse-right-panel="" data-collapse-right-panel-on-chat="">
+                {renderMainFileToggle(false)}
+              </div>
+            )}
           </div>
         )}
         <div style={{
@@ -2359,12 +2520,17 @@ export function AppShell() {
   const picker = (
     <WorkspacePicker
       host={workspacePhase === "ready" ? "modal" : "welcome"}
-      projects={welcomeProjects}
+      projects={pickerProjects}
+      starredKeys={workspacePrefs.starred.map((item) => item.key)}
+      hiddenCount={workspacePrefs.hidden.length}
       loading={workspacePhase === "welcome-loading"}
       error={welcomeError}
       currentKey={workspacePhase === "ready" ? (activeProjectKeyRef.current ?? null) : null}
       modelsReady={modelsReady}
       onSelect={handlePickerSelect}
+      onStar={handlePickerStar}
+      onHide={handlePickerHide}
+      onResetHidden={handleResetHidden}
       onBrowse={() => {
         setBrowseError(null);
         setBrowseOpen(true);
@@ -2642,33 +2808,20 @@ export function AppShell() {
       )}
 
       {/* Center: chat */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
+      <div
+        data-editor-main-column={editorChatFills ? "collapsed" : "open"}
+        style={{
+          flex: editorChatFills ? 0 : 1,
+          display: editorChatFills ? "none" : "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          minWidth: 0,
+        }}
+      >
         {/* Top bar with sidebar toggle */}
         <div ref={topBarRef} style={{ flexShrink: 0, background: "var(--bg-panel)" }}>
         <div style={{ display: "flex", alignItems: "center", position: "relative", borderBottom: "1px solid var(--border)", height: "calc(36px + env(safe-area-inset-top))", paddingTop: "env(safe-area-inset-top)" }}>
-          <button
-            onClick={handleSidebarToggle}
-             title={sidebarOpen ? translate("sidebar.hide") : translate("sidebar.show")}
-             aria-label={sidebarOpen ? translate("sidebar.hide") : translate("sidebar.show")}
-            style={{
-              display: "flex", alignItems: "center", justifyContent: "center",
-              width: TOP_BAR_ICON_BUTTON_SIZE, height: TOP_BAR_ICON_BUTTON_SIZE, padding: 0,
-              background: "none", border: "none", borderRight: "1px solid var(--border)",
-              color: "var(--text-muted)", cursor: "pointer", flexShrink: 0, transition: "color 0.12s",
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-muted)"; }}
-          >
-            {sidebarOpen ? (
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="3" width="18" height="18" rx="2" /><line x1="9" y1="3" x2="9" y2="21" />
-              </svg>
-            ) : (
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                <line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" />
-              </svg>
-            )}
-          </button>
+          {renderLeftSidebarToggle()}
           {isMobile && (
             <div
               ref={mobileToolbarRef}
@@ -2943,10 +3096,10 @@ export function AppShell() {
 
       <div
         aria-hidden="true"
-        className={`right-panel-overlay-backdrop${rightPanelOpen ? " is-open" : ""}`}
+        className={`right-panel-overlay-backdrop${rightPanelOpen && !editorChatFills ? " is-open" : ""}`}
         onClick={() => setRightPanelOpen(false)}
       />
-      {rightPanelOpen && (
+      {rightPanelOpen && !editorChatFills && (
         <div
           {...rightPanelResizer.separatorProps}
           aria-controls="file-panel"
@@ -2960,7 +3113,8 @@ export function AppShell() {
       <div
         ref={rightPanelResizer.panelRef}
         id="file-panel"
-        className={`right-panel-container${rightPanelOpen ? " right-panel-open" : " right-panel-closed"}${rightPanelResizer.isResizing || historyResizer.isResizing ? " right-panel-resizing" : ""}`}
+        className={`right-panel-container${rightPanelOpen ? " right-panel-open" : " right-panel-closed"}${rightPanelResizer.isResizing || historyResizer.isResizing ? " right-panel-resizing" : ""}${editorChatFills ? " right-panel-fill" : ""}`}
+        data-editor-chat-expanded={editorChatFills ? "" : undefined}
         style={{
           "--right-panel-width": `${rightPanelResizer.width + (
             !isMobile && isEditorLayout && rightPanelOpen && agentHistoryOpen
@@ -3059,8 +3213,8 @@ export function AppShell() {
             overflow: "auto",
             background: "var(--bg-panel)",
             border: "1px solid var(--border)",
-            borderRadius: 12,
-            boxShadow: "0 8px 28px rgba(0,0,0,0.12)",
+            borderRadius: 6,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.10)",
           }}
         >
           {picker}
